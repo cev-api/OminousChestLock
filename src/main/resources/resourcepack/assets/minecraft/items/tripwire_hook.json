@@ -1,0 +1,33 @@
+{
+  "model": {
+    "type": "minecraft:range_dispatch",
+    "property": "minecraft:custom_model_data",
+    "entries": [
+      {
+        "threshold": 11001,
+        "model": {
+          "type": "minecraft:model",
+          "model": "minecraft:item/rusty_lock_pick"
+        }
+      },
+      {
+        "threshold": 11002,
+        "model": {
+          "type": "minecraft:model",
+          "model": "minecraft:item/lock_pick"
+        }
+      },
+      {
+        "threshold": 11003,
+        "model": {
+          "type": "minecraft:model",
+          "model": "minecraft:item/silence_lock_pick"
+        }
+      }
+    ],
+    "fallback": {
+      "type": "minecraft:model",
+      "model": "minecraft:item/tripwire_hook"
+    }
+  }
+}

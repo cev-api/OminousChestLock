@@ -5,7 +5,9 @@ import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
 import org.bukkit.Sound;
+import org.bukkit.SoundCategory;
 import org.bukkit.World;
 import org.bukkit.block.Barrel;
 import org.bukkit.block.Block;
@@ -45,10 +47,14 @@ import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.RecipeChoice;
+import org.bukkit.inventory.ShapelessRecipe;
 import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.inventory.SmithingTransformRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.Tag;
+import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.projectiles.ProjectileSource;
 
 import java.io.File;
@@ -60,6 +66,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 
 public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCompleter {
     private static final PlainTextComponentSerializer TEXT_SERIALIZER = PlainTextComponentSerializer.plainText();
@@ -73,6 +80,28 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private final Map<String, HopperOwner> hopperOwners = new HashMap<>();
     private int logLevel = 1;
     private boolean allowNormalKeys = false;
+    private boolean allowLockpicks = true;
+    private NamespacedKey pickTypeKey;
+    private int pickLimitMin = 1;
+    private int pickLimitMax = 20;
+    private double rustyOpenChance = 0.05;
+    private double rustyNormalKeyChance = 0.10;
+    private double rustyBreakChance = 1.0;
+    private double rustyDamage = 1.0;
+    private double normalOpenChance = 0.10;
+    private double normalNormalKeyChance = 0.20;
+    private double normalBreakChance = 0.50;
+    private double normalDamage = 2.0;
+    private double silenceOpenChance = 0.50;
+    private double silenceBreakChance = 0.05;
+    private double silenceDamage = 4.0;
+    private long silencePenaltyResetMs = SILENCE_PENALTY_RESET_MS;
+    private LockoutScope lockoutScope = LockoutScope.CHEST;
+
+    private static final long SILENCE_PENALTY_RESET_MS = 60L * 60L * 1000L;
+    private static final int RUSTY_MODEL_DATA = 11001;
+    private static final int NORMAL_MODEL_DATA = 11002;
+    private static final int SILENCE_MODEL_DATA = 11003;
 
     private File dataFile;
 
@@ -80,8 +109,10 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     public void onEnable() {
         dataFile = new File(getDataFolder(), "data.yml");
         saveDefaultConfig();
+        pickTypeKey = new NamespacedKey(this, "lock_pick_type");
         loadConfigValues();
         loadData();
+        updatePickRecipes();
         getServer().getPluginManager().registerEvents(this, this);
         if (getCommand("chestlock") != null) {
             getCommand("chestlock").setExecutor(this);
@@ -102,6 +133,15 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
 
         if (!sender.hasPermission("chestlock.admin")) {
             sender.sendMessage(Component.text("You do not have permission."));
+            return true;
+        }
+
+        if (args.length == 0) {
+            if (sender instanceof Player player) {
+                sendHelp(player);
+            } else {
+                sender.sendMessage(Component.text("Usage: /chestlock <info|unlock|keyinfo|reload|loglevel|normalkeys|lockpicks|give|help>"));
+            }
             return true;
         }
 
@@ -127,6 +167,17 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 player.sendMessage(Component.text("Locked with key name: " + lockInfo.keyName()));
                 player.sendMessage(Component.text("Created by: " + creator));
                 player.sendMessage(Component.text("Last used by: " + lastUser));
+                PickState state = getPickState(lockInfo, player);
+                player.sendMessage(Component.text("Rusty pick: " + formatPickStatus(state.rustyAttempts(), state.rustyLimit())));
+                player.sendMessage(Component.text("Normal pick: " + formatPickStatus(state.normalAttempts(), state.normalLimit())));
+                player.sendMessage(Component.text("Silence pick: " + formatSilenceStatus(state)));
+                if (lockInfo.lastPickUserName() != null && lockInfo.lastPickType() != null) {
+                    String when = lockInfo.lastPickTimestamp() > 0L
+                            ? formatDuration(System.currentTimeMillis() - lockInfo.lastPickTimestamp()) + " ago"
+                            : "unknown time";
+                    player.sendMessage(Component.text("Last pick attempt: " + lockInfo.lastPickUserName()
+                            + " with " + lockInfo.lastPickType() + " (" + when + ")"));
+                }
                 return true;
             }
             case "unlock" -> {
@@ -185,7 +236,46 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 reloadConfig();
                 loadConfigValues();
                 loadData();
+                updatePickRecipes();
                 sender.sendMessage(Component.text("ChestLock data reloaded."));
+                return true;
+            }
+            case "give" -> {
+                if (args.length < 3) {
+                    sender.sendMessage(Component.text("Usage: /chestlock give <player> <rusty|normal|silence> [amount]"));
+                    return true;
+                }
+                String playerName = args[1];
+                Player target = Bukkit.getPlayerExact(playerName);
+                if (target == null) {
+                    sender.sendMessage(Component.text("Player not found: " + playerName));
+                    return true;
+                }
+                PickType pickType = parsePickType(args[2]);
+                if (pickType == null) {
+                    sender.sendMessage(Component.text("Pick type must be rusty, normal, or silence."));
+                    return true;
+                }
+                int amount = 1;
+                if (args.length >= 4) {
+                    try {
+                        amount = Integer.parseInt(args[3]);
+                    } catch (NumberFormatException ex) {
+                        sender.sendMessage(Component.text("Amount must be a number."));
+                        return true;
+                    }
+                }
+                if (amount <= 0) {
+                    sender.sendMessage(Component.text("Amount must be at least 1."));
+                    return true;
+                }
+                ItemStack stack = createPick(pickType);
+                stack.setAmount(amount);
+                Map<Integer, ItemStack> overflow = target.getInventory().addItem(stack);
+                for (ItemStack extra : overflow.values()) {
+                    target.getWorld().dropItemNaturally(target.getLocation(), extra);
+                }
+                sender.sendMessage(Component.text("Gave " + amount + " " + pickType.id + " pick(s) to " + target.getName() + "."));
                 return true;
             }
             case "loglevel" -> {
@@ -226,11 +316,47 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 sender.sendMessage(Component.text("Normal trial keys are now " + (allowNormalKeys ? "enabled." : "disabled.")));
                 return true;
             }
+            case "lockpicks" -> {
+                if (args.length < 2) {
+                    sender.sendMessage(Component.text("Lockpicking is " + (allowLockpicks ? "enabled." : "disabled.")));
+                    sender.sendMessage(Component.text("Usage: /chestlock lockpicks <on|off>"));
+                    return true;
+                }
+                String value = args[1].toLowerCase();
+                if (!value.equals("on") && !value.equals("off")) {
+                    sender.sendMessage(Component.text("Usage: /chestlock lockpicks <on|off>"));
+                    return true;
+                }
+                allowLockpicks = value.equals("on");
+                getConfig().set("lockpicks.enabled", allowLockpicks);
+                saveConfig();
+                updatePickRecipes();
+                sender.sendMessage(Component.text("Lockpicking is now " + (allowLockpicks ? "enabled." : "disabled.")));
+                return true;
+            }
+            case "lockoutscope" -> {
+                if (args.length < 2) {
+                    sender.sendMessage(Component.text("Lockout scope is " + lockoutScope.name().toLowerCase() + "."));
+                    sender.sendMessage(Component.text("Usage: /chestlock lockoutscope <chest|player>"));
+                    return true;
+                }
+                String value = args[1].toLowerCase();
+                LockoutScope scope = LockoutScope.fromConfig(value);
+                if (!value.equals("chest") && !value.equals("player")) {
+                    sender.sendMessage(Component.text("Usage: /chestlock lockoutscope <chest|player>"));
+                    return true;
+                }
+                lockoutScope = scope;
+                getConfig().set("lockpicks.lockout-scope", scope.name().toLowerCase());
+                saveConfig();
+                sender.sendMessage(Component.text("Lockout scope set to " + scope.name().toLowerCase() + "."));
+                return true;
+            }
             default -> {
                 if (sender instanceof Player player) {
                     sendHelp(player);
                 } else {
-                    sender.sendMessage(Component.text("Usage: /chestlock <info|unlock|keyinfo|reload|loglevel|normalkeys|help>"));
+                    sender.sendMessage(Component.text("Usage: /chestlock <info|unlock|keyinfo|reload|loglevel|normalkeys|lockpicks|lockoutscope|give|help>"));
                 }
                 return true;
             }
@@ -243,13 +369,29 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             return List.of();
         }
         if (args.length == 1) {
-            return List.of("info", "unlock", "keyinfo", "reload", "loglevel", "normalkeys", "help");
+            return List.of("info", "unlock", "keyinfo", "reload", "loglevel", "normalkeys", "lockpicks", "lockoutscope", "give", "help");
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("loglevel")) {
             return List.of("0", "1", "2", "3");
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("normalkeys")) {
             return List.of("on", "off");
+        }
+        if (args.length == 2 && args[0].equalsIgnoreCase("lockpicks")) {
+            return List.of("on", "off");
+        }
+        if (args.length == 2 && args[0].equalsIgnoreCase("lockoutscope")) {
+            return List.of("chest", "player");
+        }
+        if (args.length == 2 && args[0].equalsIgnoreCase("give")) {
+            List<String> names = new ArrayList<>();
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                names.add(player.getName());
+            }
+            return names;
+        }
+        if (args.length == 3 && args[0].equalsIgnoreCase("give")) {
+            return List.of("rusty", "normal", "silence");
         }
         return List.of();
     }
@@ -261,6 +403,385 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         player.sendMessage(Component.text("/chestlock reload - reload lock data from disk"));
         player.sendMessage(Component.text("/chestlock loglevel <0-3> - set log verbosity"));
         player.sendMessage(Component.text("/chestlock normalkeys <on|off> - allow normal trial keys"));
+        player.sendMessage(Component.text("/chestlock lockpicks <on|off> - allow lock picking and crafting"));
+        player.sendMessage(Component.text("/chestlock lockoutscope <chest|player> - set lockout scope"));
+        player.sendMessage(Component.text("/chestlock give <player> <rusty|normal|silence> [amount] - give lock picks"));
+    }
+
+    private PickType parsePickType(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.toLowerCase();
+        if (normalized.endsWith("_pick")) {
+            normalized = normalized.substring(0, normalized.length() - "_pick".length());
+        }
+        return switch (normalized) {
+            case "rusty" -> PickType.RUSTY;
+            case "normal" -> PickType.NORMAL;
+            case "silence" -> PickType.SILENCE;
+            default -> null;
+        };
+    }
+
+    private String formatPickStatus(int attempts, int limit) {
+        if (limit < 0) {
+            return attempts + " attempts (limit pending)";
+        }
+        boolean lockedOut = attempts >= limit;
+        return attempts + "/" + limit + (lockedOut ? " (locked out)" : "");
+    }
+
+    private String formatSilenceStatus(PickState state) {
+        String base = formatPickStatus(state.silenceAttempts(), state.silenceLimit());
+        int overLimit = state.silenceOverLimitAttempts();
+        String penalty;
+        if (state.silencePenaltyTimestamp() <= 0L) {
+            penalty = "penalty ready";
+        } else {
+            long remaining = silencePenaltyResetMs - (System.currentTimeMillis() - state.silencePenaltyTimestamp());
+            penalty = remaining > 0 ? "penalty resets in " + formatDuration(remaining) : "penalty ready";
+        }
+        return base + ", over-limit attempts " + overLimit + ", " + penalty;
+    }
+
+    private String formatDuration(long ms) {
+        if (ms < 0) {
+            return "unknown";
+        }
+        long seconds = ms / 1000L;
+        long minutes = seconds / 60L;
+        long hours = minutes / 60L;
+        if (hours > 0) {
+            long remMinutes = minutes % 60L;
+            return hours + "h" + (remMinutes > 0 ? " " + remMinutes + "m" : "");
+        }
+        if (minutes > 0) {
+            long remSeconds = seconds % 60L;
+            return minutes + "m" + (remSeconds > 0 ? " " + remSeconds + "s" : "");
+        }
+        return seconds + "s";
+    }
+
+    private void updatePickRecipes() {
+        NamespacedKey rustyKey = new NamespacedKey(this, "rusty_lock_pick");
+        NamespacedKey normalKey = new NamespacedKey(this, "normal_lock_pick");
+        NamespacedKey silenceKey = new NamespacedKey(this, "silence_lock_pick");
+        Bukkit.removeRecipe(rustyKey);
+        Bukkit.removeRecipe(normalKey);
+        Bukkit.removeRecipe(silenceKey);
+        if (!allowLockpicks) {
+            return;
+        }
+        ItemStack rustyPick = createPick(PickType.RUSTY);
+        ItemStack normalPick = createPick(PickType.NORMAL);
+        ItemStack silencePick = createPick(PickType.SILENCE);
+
+        ShapelessRecipe rustyRecipe = new ShapelessRecipe(rustyKey, rustyPick);
+        rustyRecipe.addIngredient(Material.COPPER_INGOT);
+        rustyRecipe.addIngredient(Material.TRIPWIRE_HOOK);
+        rustyRecipe.addIngredient(Material.STICK);
+        Bukkit.addRecipe(rustyRecipe);
+
+        ShapelessRecipe normalRecipe = new ShapelessRecipe(normalKey, normalPick);
+        normalRecipe.addIngredient(Material.IRON_INGOT);
+        normalRecipe.addIngredient(Material.TRIPWIRE_HOOK);
+        normalRecipe.addIngredient(Material.BREEZE_ROD);
+        Bukkit.addRecipe(normalRecipe);
+
+        SmithingTransformRecipe silenceRecipe = new SmithingTransformRecipe(
+                silenceKey,
+                silencePick,
+                new RecipeChoice.MaterialChoice(Material.SILENCE_ARMOR_TRIM_SMITHING_TEMPLATE),
+                new RecipeChoice.ExactChoice(normalPick),
+                new RecipeChoice.MaterialChoice(Material.ECHO_SHARD)
+        );
+        Bukkit.addRecipe(silenceRecipe);
+    }
+
+    private PickState getPickState(LockInfo info, Player player) {
+        if (info == null) {
+            return PickState.empty();
+        }
+        if (lockoutScope == LockoutScope.PLAYER) {
+            if (player == null) {
+                return PickState.empty();
+            }
+            PickState state = info.playerPickStates().get(player.getUniqueId());
+            return state == null ? PickState.empty() : state;
+        }
+        return info.toPickState();
+    }
+
+    private LockInfo updatePickState(LockInfo info, Player player, PickState state) {
+        if (info == null || state == null) {
+            return info;
+        }
+        if (lockoutScope == LockoutScope.PLAYER) {
+            if (player == null) {
+                return info;
+            }
+            return info.withPlayerPickState(player.getUniqueId(), state);
+        }
+        return info.withPickState(state);
+    }
+
+    private ItemStack createPick(PickType type) {
+        ItemStack item = new ItemStack(Material.TRIPWIRE_HOOK);
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            meta.displayName(Component.text(type.displayName));
+            meta.setCustomModelData(type.modelData);
+            meta.getPersistentDataContainer().set(pickTypeKey, PersistentDataType.STRING, type.id);
+            item.setItemMeta(meta);
+        }
+        return item;
+    }
+
+    private PickType getPickType(ItemStack itemStack) {
+        if (itemStack == null || itemStack.getType() != Material.TRIPWIRE_HOOK) {
+            return null;
+        }
+        ItemMeta meta = itemStack.getItemMeta();
+        if (meta == null) {
+            return null;
+        }
+        String id = meta.getPersistentDataContainer().get(pickTypeKey, PersistentDataType.STRING);
+        if (id == null || id.isBlank()) {
+            return null;
+        }
+        return PickType.fromId(id);
+    }
+
+    private PickMatch findHeldPick(Player player) {
+        PickType main = getPickType(player.getInventory().getItemInMainHand());
+        if (main != null) {
+            return new PickMatch(main, EquipmentSlot.HAND);
+        }
+        PickType off = getPickType(player.getInventory().getItemInOffHand());
+        if (off != null) {
+            return new PickMatch(off, EquipmentSlot.OFF_HAND);
+        }
+        return null;
+    }
+
+    private void handlePickAttempt(PlayerInteractEvent event, Block block, LockInfo lockInfo, PickMatch pickMatch) {
+        if (!allowLockpicks) {
+            event.setCancelled(true);
+            event.getPlayer().sendMessage(Component.text("Lockpicking is disabled."));
+            return;
+        }
+        List<Location> locations = resolveLockLocations(block);
+        if (locations.isEmpty()) {
+            return;
+        }
+
+        Player player = event.getPlayer();
+        PickType pickType = pickMatch.type();
+        boolean normalKeyLock = lockInfo.normalKey();
+        long now = System.currentTimeMillis();
+        boolean success;
+        boolean overLimit = false;
+        boolean lockoutNow = false;
+        boolean changed = false;
+        LockInfo updated = lockInfo;
+        PickState state = getPickState(lockInfo, player);
+
+        switch (pickType) {
+            case RUSTY -> {
+                int limit = state.rustyLimit();
+                if (limit < 0) {
+                    limit = ThreadLocalRandom.current().nextInt(pickLimitMin, pickLimitMax + 1);
+                    state = state.withRustyLimit(limit);
+                    changed = true;
+                }
+                int attempts = state.rustyAttempts();
+                boolean overLimitBefore = attempts >= limit;
+                lockoutNow = !overLimitBefore && (attempts + 1) >= limit;
+                overLimit = overLimitBefore || lockoutNow;
+                state = state.withRustyAttempts(attempts + 1);
+                changed = true;
+                double chance = normalKeyLock ? rustyNormalKeyChance : rustyOpenChance;
+                success = !overLimitBefore && !lockoutNow && ThreadLocalRandom.current().nextDouble() < chance;
+                if (!success) {
+                    player.damage(rustyDamage);
+                    if (lockoutNow) {
+                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_DEACTIVATE);
+                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_HIT);
+                    } else if (overLimitBefore) {
+                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_HIT);
+                    } else {
+                        playWorldSoundDelayed(block, Sound.BLOCK_CHEST_LOCKED);
+                    }
+                } else {
+                    playWorldSoundDelayed(block, Sound.BLOCK_TRIPWIRE_CLICK_ON);
+                }
+            }
+            case NORMAL -> {
+                int limit = state.normalLimit();
+                if (limit < 0) {
+                    limit = ThreadLocalRandom.current().nextInt(pickLimitMin, pickLimitMax + 1);
+                    state = state.withNormalLimit(limit);
+                    changed = true;
+                }
+                int attempts = state.normalAttempts();
+                boolean overLimitBefore = attempts >= limit;
+                lockoutNow = !overLimitBefore && (attempts + 1) >= limit;
+                overLimit = overLimitBefore || lockoutNow;
+                state = state.withNormalAttempts(attempts + 1);
+                changed = true;
+                double chance = normalKeyLock ? normalNormalKeyChance : normalOpenChance;
+                success = !overLimitBefore && !lockoutNow && ThreadLocalRandom.current().nextDouble() < chance;
+                if (!success) {
+                    player.damage(normalDamage);
+                    if (lockoutNow) {
+                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_DEACTIVATE);
+                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_HIT);
+                    } else if (overLimitBefore) {
+                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_HIT);
+                    } else {
+                        playWorldSoundDelayed(block, Sound.BLOCK_CHEST_LOCKED);
+                    }
+                } else {
+                    playWorldSoundDelayed(block, Sound.BLOCK_TRIPWIRE_CLICK_ON);
+                }
+            }
+            case SILENCE -> {
+                int limit = state.silenceLimit();
+                if (limit < 0) {
+                    limit = ThreadLocalRandom.current().nextInt(pickLimitMin, pickLimitMax + 1);
+                    state = state.withSilenceLimit(limit);
+                    changed = true;
+                }
+                int attempts = state.silenceAttempts();
+                boolean overLimitBefore = attempts >= limit;
+                lockoutNow = !overLimitBefore && (attempts + 1) >= limit;
+                overLimit = overLimitBefore || lockoutNow;
+
+                int overLimitAttempts = state.silenceOverLimitAttempts();
+                boolean penaltyExpired = state.silencePenaltyTimestamp() > 0
+                        && now - state.silencePenaltyTimestamp() >= silencePenaltyResetMs;
+                if (penaltyExpired) {
+                    overLimitAttempts = 0;
+                    state = state.withSilenceOverLimitAttempts(0).withSilencePenaltyTimestamp(0L);
+                    changed = true;
+                }
+
+                double chance = silenceOpenChance;
+                if (overLimit) {
+                    boolean criticalOverLimit = lockoutNow || overLimitAttempts == 0;
+                    if (criticalOverLimit) {
+                        overLimitAttempts = 1;
+                    }
+                    int penaltySteps = overLimitAttempts;
+                    chance = chance / Math.pow(2.0, penaltySteps);
+                    player.damage(silenceDamage);
+                    if (criticalOverLimit) {
+                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_DEACTIVATE);
+                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_HIT);
+                    } else if (overLimitBefore) {
+                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_HIT);
+                    }
+                    overLimitAttempts += 1;
+                    state = state.withSilenceOverLimitAttempts(overLimitAttempts).withSilencePenaltyTimestamp(now);
+                    changed = true;
+                }
+                state = state.withSilenceAttempts(attempts + 1);
+                changed = true;
+                success = !overLimitBefore && !lockoutNow && ThreadLocalRandom.current().nextDouble() < chance;
+            }
+            default -> {
+                return;
+            }
+        }
+
+        updated = updated.withLastPick(player, pickType, now);
+        updated = updatePickState(updated, player, state);
+        changed = true;
+
+        if (!success && changed) {
+            updateLockInfo(locations, updated);
+        }
+
+        double breakChance = switch (pickType) {
+            case RUSTY -> rustyBreakChance;
+            case NORMAL -> normalBreakChance;
+            case SILENCE -> silenceBreakChance;
+        };
+        if (ThreadLocalRandom.current().nextDouble() < breakChance) {
+            consumeOnePick(player, pickMatch);
+        }
+
+        if (success) {
+            unlock(block, lockInfo.keyName());
+            logLockEvent("PICK_SUCCESS", player.getName(), null, block.getLocation(), lockInfo, "pick=" + pickType.id);
+            if (pickType == PickType.SILENCE) {
+                playWorldSoundDelayed(block, Sound.BLOCK_VAULT_OPEN_SHUTTER);
+                event.setCancelled(true);
+                openSilently(player, block);
+            } else {
+                event.setCancelled(false);
+                event.setUseInteractedBlock(Result.ALLOW);
+                event.setUseItemInHand(Result.ALLOW);
+            }
+        } else {
+            event.setCancelled(true);
+            logLockEvent("PICK_FAIL", player.getName(), null, block.getLocation(), lockInfo,
+                    "pick=" + pickType.id + (overLimit ? " overLimit=true" : ""));
+        }
+    }
+
+    private void updateLockInfo(List<Location> locations, LockInfo info) {
+        for (Location location : locations) {
+            lockedChests.put(locationKey(location), info);
+        }
+        saveData();
+    }
+
+    private void playWorldSoundDelayed(Block block, Sound sound) {
+        if (block == null || sound == null) {
+            return;
+        }
+        World world = block.getWorld();
+        if (world == null) {
+            return;
+        }
+        Bukkit.getScheduler().runTask(this,
+                () -> world.playSound(block.getLocation(), sound, SoundCategory.MASTER, 1.6f, 1.0f));
+    }
+
+    private void consumeOnePick(Player player, PickMatch match) {
+        ItemStack stack = match.slot() == EquipmentSlot.HAND
+                ? player.getInventory().getItemInMainHand()
+                : player.getInventory().getItemInOffHand();
+        if (stack == null || stack.getType() != Material.TRIPWIRE_HOOK) {
+            return;
+        }
+        int amount = stack.getAmount();
+        if (amount <= 1) {
+            if (match.slot() == EquipmentSlot.HAND) {
+                player.getInventory().setItemInMainHand(null);
+            } else {
+                player.getInventory().setItemInOffHand(null);
+            }
+        } else {
+            stack.setAmount(amount - 1);
+        }
+    }
+
+    private void openSilently(Player player, Block block) {
+        if (!(block.getState() instanceof InventoryHolder holder)) {
+            return;
+        }
+        player.openInventory(holder.getInventory());
+        Bukkit.getScheduler().runTask(this, () -> {
+            player.stopSound(Sound.BLOCK_CHEST_OPEN);
+            player.stopSound(Sound.BLOCK_CHEST_CLOSE);
+            player.stopSound(Sound.BLOCK_BARREL_OPEN);
+            player.stopSound(Sound.BLOCK_BARREL_CLOSE);
+            player.stopSound(Sound.BLOCK_SHULKER_BOX_OPEN);
+            player.stopSound(Sound.BLOCK_SHULKER_BOX_CLOSE);
+        });
     }
 
     @EventHandler
@@ -280,6 +801,11 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 LockInfo existingLock = getLockInfo(block);
                 if (existingLock != null) {
                     if (heldKeyName == null || !existingLock.keyName().equals(heldKeyName)) {
+                        PickMatch pickMatch = findHeldPick(event.getPlayer());
+                        if (pickMatch != null) {
+                            handlePickAttempt(event, block, existingLock, pickMatch);
+                            return;
+                        }
                         if (isDecorationItem(event.getItem())) {
                             event.setCancelled(false);
                             event.setUseInteractedBlock(Result.ALLOW);
@@ -627,7 +1153,9 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             }
         }
 
-        LockInfo info = new LockInfo(keyName, creator.getName(), creator.getUniqueId(), null, null, normalKey, false);
+        LockInfo info = new LockInfo(keyName, creator.getName(), creator.getUniqueId(), null, null, normalKey, false,
+                null, null, null, 0L,
+                -1, 0, -1, 0, -1, 0, 0, 0L, new HashMap<>());
         for (Location location : locations) {
             lockedChests.put(locationKey(location), info);
         }
@@ -892,6 +1420,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         return "OPEN_DENY".equals(action)
                 || "INTERACT_DENY".equals(action)
                 || "LOCK_DENY".equals(action)
+                || "PICK_FAIL".equals(action)
                 || "INVENTORY_CLICK_DENY".equals(action)
                 || "INVENTORY_DRAG_DENY".equals(action)
                 || "INVENTORY_MOVE_DENY".equals(action)
@@ -901,6 +1430,33 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private void loadConfigValues() {
         logLevel = getConfig().getInt("logging.level", 1);
         allowNormalKeys = getConfig().getBoolean("keys.allow-normal", false);
+        allowLockpicks = getConfig().getBoolean("lockpicks.enabled", true);
+        pickLimitMin = Math.max(1, getConfig().getInt("lockpicks.limit.min", 1));
+        pickLimitMax = Math.max(pickLimitMin, getConfig().getInt("lockpicks.limit.max", 20));
+        rustyOpenChance = clampChance(getConfig().getDouble("lockpicks.rusty.open-chance", 0.05));
+        rustyNormalKeyChance = clampChance(getConfig().getDouble("lockpicks.rusty.normal-key-chance", 0.10));
+        rustyBreakChance = clampChance(getConfig().getDouble("lockpicks.rusty.break-chance", 1.0));
+        rustyDamage = Math.max(0.0, getConfig().getDouble("lockpicks.rusty.damage", 1.0));
+        normalOpenChance = clampChance(getConfig().getDouble("lockpicks.normal.open-chance", 0.10));
+        normalNormalKeyChance = clampChance(getConfig().getDouble("lockpicks.normal.normal-key-chance", 0.20));
+        normalBreakChance = clampChance(getConfig().getDouble("lockpicks.normal.break-chance", 0.50));
+        normalDamage = Math.max(0.0, getConfig().getDouble("lockpicks.normal.damage", 2.0));
+        silenceOpenChance = clampChance(getConfig().getDouble("lockpicks.silence.open-chance", 0.50));
+        silenceBreakChance = clampChance(getConfig().getDouble("lockpicks.silence.break-chance", 0.05));
+        silenceDamage = Math.max(0.0, getConfig().getDouble("lockpicks.silence.damage", 4.0));
+        long resetMinutes = getConfig().getLong("lockpicks.silence.penalty-reset-minutes", 60L);
+        silencePenaltyResetMs = Math.max(1L, resetMinutes) * 60L * 1000L;
+        lockoutScope = LockoutScope.fromConfig(getConfig().getString("lockpicks.lockout-scope", "chest"));
+    }
+
+    private double clampChance(double value) {
+        if (value < 0.0) {
+            return 0.0;
+        }
+        if (value > 1.0) {
+            return 1.0;
+        }
+        return value;
     }
 
     private String formatLocation(Location location) {
@@ -1034,15 +1590,24 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     }
 
     private void playSuccess(Player player, Location location) {
-        player.playSound(location, Sound.BLOCK_VAULT_OPEN_SHUTTER, 1.0f, 1.0f);
+        if (location.getWorld() == null) {
+            return;
+        }
+        location.getWorld().playSound(location, Sound.BLOCK_VAULT_OPEN_SHUTTER, SoundCategory.MASTER, 1.0f, 1.0f);
     }
 
     private void playFail(Player player, Location location) {
-        player.playSound(location, Sound.BLOCK_VAULT_INSERT_ITEM_FAIL, 1.0f, 1.0f);
+        if (location.getWorld() == null) {
+            return;
+        }
+        location.getWorld().playSound(location, Sound.BLOCK_VAULT_INSERT_ITEM_FAIL, SoundCategory.MASTER, 1.0f, 1.0f);
     }
 
     private void playInsert(Player player, Location location) {
-        player.playSound(location, Sound.BLOCK_VAULT_INSERT_ITEM, 1.0f, 1.0f);
+        if (location.getWorld() == null) {
+            return;
+        }
+        location.getWorld().playSound(location, Sound.BLOCK_VAULT_INSERT_ITEM, SoundCategory.MASTER, 1.0f, 1.0f);
     }
 
     private void loadData() {
@@ -1070,6 +1635,19 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             UUID lastUserUuid = null;
             boolean normalKey = false;
             boolean normalArmed = false;
+            String lastPickUserName = null;
+            UUID lastPickUserUuid = null;
+            String lastPickType = null;
+            long lastPickTimestamp = 0L;
+            Map<UUID, PickState> playerPickStates = new HashMap<>();
+            int rustyLimit = -1;
+            int rustyAttempts = 0;
+            int normalLimit = -1;
+            int normalAttempts = 0;
+            int silenceLimit = -1;
+            int silenceAttempts = 0;
+            int silenceOverLimitAttempts = 0;
+            long silencePenaltyTimestamp = 0L;
 
             if (section.isString(locationKey)) {
                 keyName = section.getString(locationKey);
@@ -1085,13 +1663,56 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                     lastUserUuid = parseUuid(lastUserId);
                     normalKey = lockSection.getBoolean("normal.key", false);
                     normalArmed = lockSection.getBoolean("normal.armed", false);
+                    lastPickUserName = lockSection.getString("pick.last.name");
+                    lastPickUserUuid = parseUuid(lockSection.getString("pick.last.uuid"));
+                    lastPickType = lockSection.getString("pick.last.type");
+                    lastPickTimestamp = lockSection.getLong("pick.last.timestamp", 0L);
+                    if (lastPickUserName != null && lastPickUserName.isBlank()) {
+                        lastPickUserName = null;
+                    }
+                    if (lastPickType != null && lastPickType.isBlank()) {
+                        lastPickType = null;
+                    }
+                    ConfigurationSection pickPlayers = lockSection.getConfigurationSection("pick.players");
+                    if (pickPlayers != null) {
+                        for (String playerId : pickPlayers.getKeys(false)) {
+                            UUID playerUuid = parseUuid(playerId);
+                            if (playerUuid == null) {
+                                continue;
+                            }
+                            ConfigurationSection pickStateSection = pickPlayers.getConfigurationSection(playerId);
+                            if (pickStateSection == null) {
+                                continue;
+                            }
+                            int rLimit = pickStateSection.getInt("rusty.limit", -1);
+                            int rAttempts = pickStateSection.getInt("rusty.attempts", 0);
+                            int nLimit = pickStateSection.getInt("normal.limit", -1);
+                            int nAttempts = pickStateSection.getInt("normal.attempts", 0);
+                            int sLimit = pickStateSection.getInt("silence.limit", -1);
+                            int sAttempts = pickStateSection.getInt("silence.attempts", 0);
+                            int sOver = pickStateSection.getInt("silence.over-limit-attempts", 0);
+                            long sPenalty = pickStateSection.getLong("silence.penalty-timestamp", 0L);
+                            playerPickStates.put(playerUuid, new PickState(rLimit, rAttempts, nLimit, nAttempts, sLimit, sAttempts, sOver, sPenalty));
+                        }
+                    }
+                    rustyLimit = lockSection.getInt("pick.rusty.limit", -1);
+                    rustyAttempts = lockSection.getInt("pick.rusty.attempts", 0);
+                    normalLimit = lockSection.getInt("pick.normal.limit", -1);
+                    normalAttempts = lockSection.getInt("pick.normal.attempts", 0);
+                    silenceLimit = lockSection.getInt("pick.silence.limit", -1);
+                    silenceAttempts = lockSection.getInt("pick.silence.attempts", 0);
+                    silenceOverLimitAttempts = lockSection.getInt("pick.silence.over-limit-attempts", 0);
+                    silencePenaltyTimestamp = lockSection.getLong("pick.silence.penalty-timestamp", 0L);
                 }
             }
 
             if (keyName == null || keyName.isBlank()) {
                 continue;
             }
-            LockInfo info = new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed);
+            LockInfo info = new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed,
+                    lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
+                    rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
+                    silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates);
             lockedChests.put(locationKey, info);
             keyToChest.putIfAbsent(keyName, locationKey);
         }
@@ -1130,9 +1751,55 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             if (info.lastUserUuid() != null) {
                 lockSection.set("last-user.uuid", info.lastUserUuid().toString());
             }
+            if (info.lastPickUserName() != null) {
+                lockSection.set("pick.last.name", info.lastPickUserName());
+            }
+            if (info.lastPickUserUuid() != null) {
+                lockSection.set("pick.last.uuid", info.lastPickUserUuid().toString());
+            }
+            if (info.lastPickType() != null) {
+                lockSection.set("pick.last.type", info.lastPickType());
+            }
+            if (info.lastPickTimestamp() > 0L) {
+                lockSection.set("pick.last.timestamp", info.lastPickTimestamp());
+            }
+            if (!info.playerPickStates().isEmpty()) {
+                ConfigurationSection pickPlayers = lockSection.createSection("pick.players");
+                for (Map.Entry<UUID, PickState> stateEntry : info.playerPickStates().entrySet()) {
+                    UUID playerId = stateEntry.getKey();
+                    PickState state = stateEntry.getValue();
+                    if (playerId == null || state == null) {
+                        continue;
+                    }
+                    ConfigurationSection pickStateSection = pickPlayers.createSection(playerId.toString());
+                    pickStateSection.set("rusty.limit", state.rustyLimit());
+                    pickStateSection.set("rusty.attempts", state.rustyAttempts());
+                    pickStateSection.set("normal.limit", state.normalLimit());
+                    pickStateSection.set("normal.attempts", state.normalAttempts());
+                    pickStateSection.set("silence.limit", state.silenceLimit());
+                    pickStateSection.set("silence.attempts", state.silenceAttempts());
+                    pickStateSection.set("silence.over-limit-attempts", state.silenceOverLimitAttempts());
+                    pickStateSection.set("silence.penalty-timestamp", state.silencePenaltyTimestamp());
+                }
+            }
             if (info.normalKey()) {
                 lockSection.set("normal.key", true);
                 lockSection.set("normal.armed", info.normalArmed());
+            }
+            if (info.rustyLimit() >= 0 || info.rustyAttempts() > 0) {
+                lockSection.set("pick.rusty.limit", info.rustyLimit());
+                lockSection.set("pick.rusty.attempts", info.rustyAttempts());
+            }
+            if (info.normalLimit() >= 0 || info.normalAttempts() > 0) {
+                lockSection.set("pick.normal.limit", info.normalLimit());
+                lockSection.set("pick.normal.attempts", info.normalAttempts());
+            }
+            if (info.silenceLimit() >= 0 || info.silenceAttempts() > 0 || info.silenceOverLimitAttempts() > 0
+                    || info.silencePenaltyTimestamp() > 0L) {
+                lockSection.set("pick.silence.limit", info.silenceLimit());
+                lockSection.set("pick.silence.attempts", info.silenceAttempts());
+                lockSection.set("pick.silence.over-limit-attempts", info.silenceOverLimitAttempts());
+                lockSection.set("pick.silence.penalty-timestamp", info.silencePenaltyTimestamp());
             }
         }
         try {
@@ -1150,9 +1817,28 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         private final UUID lastUserUuid;
         private final boolean normalKey;
         private final boolean normalArmed;
+        private final String lastPickUserName;
+        private final UUID lastPickUserUuid;
+        private final String lastPickType;
+        private final long lastPickTimestamp;
+        private final int rustyLimit;
+        private final int rustyAttempts;
+        private final int normalLimit;
+        private final int normalAttempts;
+        private final int silenceLimit;
+        private final int silenceAttempts;
+        private final int silenceOverLimitAttempts;
+        private final long silencePenaltyTimestamp;
+        private final Map<UUID, PickState> playerPickStates;
 
         private LockInfo(String keyName, String creatorName, UUID creatorUuid, String lastUserName, UUID lastUserUuid,
-                         boolean normalKey, boolean normalArmed) {
+                         boolean normalKey, boolean normalArmed,
+                         String lastPickUserName, UUID lastPickUserUuid, String lastPickType, long lastPickTimestamp,
+                         int rustyLimit, int rustyAttempts,
+                         int normalLimit, int normalAttempts,
+                         int silenceLimit, int silenceAttempts,
+                         int silenceOverLimitAttempts, long silencePenaltyTimestamp,
+                         Map<UUID, PickState> playerPickStates) {
             this.keyName = keyName;
             this.creatorName = creatorName;
             this.creatorUuid = creatorUuid;
@@ -1160,6 +1846,19 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             this.lastUserUuid = lastUserUuid;
             this.normalKey = normalKey;
             this.normalArmed = normalArmed;
+            this.lastPickUserName = lastPickUserName;
+            this.lastPickUserUuid = lastPickUserUuid;
+            this.lastPickType = lastPickType;
+            this.lastPickTimestamp = lastPickTimestamp;
+            this.rustyLimit = rustyLimit;
+            this.rustyAttempts = rustyAttempts;
+            this.normalLimit = normalLimit;
+            this.normalAttempts = normalAttempts;
+            this.silenceLimit = silenceLimit;
+            this.silenceAttempts = silenceAttempts;
+            this.silenceOverLimitAttempts = silenceOverLimitAttempts;
+            this.silencePenaltyTimestamp = silencePenaltyTimestamp;
+            this.playerPickStates = playerPickStates == null ? new HashMap<>() : new HashMap<>(playerPickStates);
         }
 
         private String keyName() {
@@ -1190,12 +1889,105 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             return normalArmed;
         }
 
+        private String lastPickUserName() {
+            return lastPickUserName;
+        }
+
+        private UUID lastPickUserUuid() {
+            return lastPickUserUuid;
+        }
+
+        private String lastPickType() {
+            return lastPickType;
+        }
+
+        private long lastPickTimestamp() {
+            return lastPickTimestamp;
+        }
+
+        private int rustyLimit() {
+            return rustyLimit;
+        }
+
+        private int rustyAttempts() {
+            return rustyAttempts;
+        }
+
+        private int normalLimit() {
+            return normalLimit;
+        }
+
+        private int normalAttempts() {
+            return normalAttempts;
+        }
+
+        private int silenceLimit() {
+            return silenceLimit;
+        }
+
+        private int silenceAttempts() {
+            return silenceAttempts;
+        }
+
+        private int silenceOverLimitAttempts() {
+            return silenceOverLimitAttempts;
+        }
+
+        private long silencePenaltyTimestamp() {
+            return silencePenaltyTimestamp;
+        }
+
+        private Map<UUID, PickState> playerPickStates() {
+            return playerPickStates;
+        }
+
+        private PickState toPickState() {
+            return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
+                    silenceOverLimitAttempts, silencePenaltyTimestamp);
+        }
+
         private LockInfo withLastUser(Player player) {
-            return new LockInfo(keyName, creatorName, creatorUuid, player.getName(), player.getUniqueId(), normalKey, normalArmed);
+            return new LockInfo(keyName, creatorName, creatorUuid, player.getName(), player.getUniqueId(), normalKey, normalArmed,
+                    lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
+                    rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
+                    silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates);
         }
 
         private LockInfo withNormalArmed(boolean armed) {
-            return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, armed);
+            return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, armed,
+                    lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
+                    rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
+                    silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates);
+        }
+
+        private LockInfo withLastPick(Player player, PickType pickType, long timestamp) {
+            return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed,
+                    player.getName(), player.getUniqueId(), pickType.id, timestamp,
+                    rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
+                    silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates);
+        }
+
+        private LockInfo withPickState(PickState state) {
+            if (state == null) {
+                return this;
+            }
+            return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed,
+                    lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
+                    state.rustyLimit(), state.rustyAttempts(), state.normalLimit(), state.normalAttempts(),
+                    state.silenceLimit(), state.silenceAttempts(), state.silenceOverLimitAttempts(),
+                    state.silencePenaltyTimestamp(), playerPickStates);
+        }
+
+        private LockInfo withPlayerPickState(UUID playerId, PickState state) {
+            if (playerId == null || state == null) {
+                return this;
+            }
+            Map<UUID, PickState> updatedStates = new HashMap<>(playerPickStates);
+            updatedStates.put(playerId, state);
+            return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed,
+                    lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
+                    rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
+                    silenceOverLimitAttempts, silencePenaltyTimestamp, updatedStates);
         }
     }
 
@@ -1248,5 +2040,97 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     }
 
     private record KeyMatch(String name, EquipmentSlot slot, boolean normal) {
+    }
+
+    private record PickMatch(PickType type, EquipmentSlot slot) {
+    }
+
+    private record PickState(int rustyLimit, int rustyAttempts,
+                             int normalLimit, int normalAttempts,
+                             int silenceLimit, int silenceAttempts,
+                             int silenceOverLimitAttempts, long silencePenaltyTimestamp) {
+        private static PickState empty() {
+            return new PickState(-1, 0, -1, 0, -1, 0, 0, 0L);
+        }
+
+        private PickState withRustyLimit(int limit) {
+            return new PickState(limit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
+                    silenceOverLimitAttempts, silencePenaltyTimestamp);
+        }
+
+        private PickState withRustyAttempts(int attempts) {
+            return new PickState(rustyLimit, attempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
+                    silenceOverLimitAttempts, silencePenaltyTimestamp);
+        }
+
+        private PickState withNormalLimit(int limit) {
+            return new PickState(rustyLimit, rustyAttempts, limit, normalAttempts, silenceLimit, silenceAttempts,
+                    silenceOverLimitAttempts, silencePenaltyTimestamp);
+        }
+
+        private PickState withNormalAttempts(int attempts) {
+            return new PickState(rustyLimit, rustyAttempts, normalLimit, attempts, silenceLimit, silenceAttempts,
+                    silenceOverLimitAttempts, silencePenaltyTimestamp);
+        }
+
+        private PickState withSilenceLimit(int limit) {
+            return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, limit, silenceAttempts,
+                    silenceOverLimitAttempts, silencePenaltyTimestamp);
+        }
+
+        private PickState withSilenceAttempts(int attempts) {
+            return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, attempts,
+                    silenceOverLimitAttempts, silencePenaltyTimestamp);
+        }
+
+        private PickState withSilenceOverLimitAttempts(int attempts) {
+            return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
+                    attempts, silencePenaltyTimestamp);
+        }
+
+        private PickState withSilencePenaltyTimestamp(long timestamp) {
+            return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
+                    silenceOverLimitAttempts, timestamp);
+        }
+    }
+
+    private enum LockoutScope {
+        CHEST,
+        PLAYER;
+
+        private static LockoutScope fromConfig(String value) {
+            if (value == null) {
+                return CHEST;
+            }
+            return switch (value.toLowerCase()) {
+                case "player" -> PLAYER;
+                default -> CHEST;
+            };
+        }
+    }
+
+    private enum PickType {
+        RUSTY("rusty", "Rusty Lock Pick", RUSTY_MODEL_DATA),
+        NORMAL("normal", "Lock Pick", NORMAL_MODEL_DATA),
+        SILENCE("silence", "Silence Lock Pick", SILENCE_MODEL_DATA);
+
+        private final String id;
+        private final String displayName;
+        private final int modelData;
+
+        PickType(String id, String displayName, int modelData) {
+            this.id = id;
+            this.displayName = displayName;
+            this.modelData = modelData;
+        }
+
+        private static PickType fromId(String id) {
+            for (PickType type : values()) {
+                if (type.id.equalsIgnoreCase(id)) {
+                    return type;
+                }
+            }
+            return null;
+        }
     }
 }

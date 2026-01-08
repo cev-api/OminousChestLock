@@ -2,8 +2,8 @@ plugins {
     java
 }
 
-group = "com.example"
-version = "1.0.0"
+group = "com.cevapi"
+version = "1.1.0"
 
 tasks.withType<JavaCompile> {
     options.encoding = "UTF-8"

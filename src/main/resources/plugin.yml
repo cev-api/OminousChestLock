@@ -5,7 +5,7 @@ api-version: "1.21"
 commands:
   chestlock:
     description: Admin commands for ChestLock
-    usage: "/chestlock <info|unlock|reload|keyinfo|loglevel|normalkeys|help>"
+    usage: "/chestlock <info|unlock|reload|keyinfo|loglevel|normalkeys|lockpicks|lockoutscope|give|help>"
     permission: chestlock.admin
 permissions:
   chestlock.admin:

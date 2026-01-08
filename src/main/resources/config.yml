@@ -4,3 +4,28 @@ logging:
 keys:
   # false = ominous trial keys only, true = ominous + normal trial keys
   allow-normal: false
+lockpicks:
+  # true = allow lock pick crafting and usage
+  enabled: true
+  # random attempt limit before lockout
+  limit:
+    min: 1
+    max: 20
+  # lockout scope: "chest" = shared for all players, "player" = per-player lockout tracking
+  lockout-scope: chest
+  rusty:
+    open-chance: 0.05
+    normal-key-chance: 0.10
+    break-chance: 1.0
+    damage: 1.0
+  normal:
+    open-chance: 0.10
+    normal-key-chance: 0.20
+    break-chance: 0.50
+    damage: 2.0
+  silence:
+    open-chance: 0.50
+    break-chance: 0.05
+    damage: 4.0
+    # time until over-limit penalty resets
+    penalty-reset-minutes: 60
