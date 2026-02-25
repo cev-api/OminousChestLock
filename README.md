@@ -20,15 +20,49 @@ Vault sounds are used for success/failure feedback.
 
 Three lock picks can be crafted and used to pick locked containers when you do not have the correct key. Attempts and lockouts are tracked per pick type, using the configured lockout scope.
 
-- Rusty pick: `copper ingot + tripwire hook + stick`, default 100% break chance, 5% open chance (10% on normal-key locks).
-- Normal pick: `iron ingot + tripwire hook + breeze rod`, default 50% break chance, 10% open chance (20% on normal-key locks).
-- Silence pick: `normal pick + silence trim + echo shard` in a smithing table, default 5% break chance, 50% base open chance. After lockout, each attempt halves the chance; the penalty resets after the configured time.
+- Rusty pick: `copper ingot + tripwire hook + stick` (default 100% break chance).
+- Normal pick: `iron ingot + tripwire hook + breeze rod` (default 50% break chance).
+- Silence pick: `normal pick + silence trim + echo shard` in a smithing table (default 5% break chance).
 
 Lockout limit is a random roll between `lockpicks.limit.min` and `lockpicks.limit.max` (inclusive). The roll happens on the first pick attempt for that pick type and is stored on the lock until it is unlocked/destroyed.
 
 Lockout scope can be set to `chest` (shared across all players) or `player` (each player has their own lockout/attempts) via `lockpicks.lockout-scope`.
 
-On failed attempts, the player takes damage (defaults: 0.5/1/2 hearts for rusty/normal/silence). Rusty/normal picks play chest-locked sounds, then vault deactivate on lockout and vault hit on further attempts. Silence picks only play a sound on the lockout (vault deactivate), then vault hit until the penalty reset.
+On failed attempts, the player takes damage (defaults: 0.5/1/2 hearts for rusty/normal/silence). Rusty/normal lock out hard when over limit. Silence uses soft over-limit penalties and resets after `lockpicks.silence.penalty-reset-minutes`. The silence reset timer is anchored to the first over-limit attempt and does not extend with additional over-limit tries.
+
+The attempt limit roll, lockout tracking, and fail-damage rules apply in both lockpick modes (legacy RNG and minigame). In minigame mode, each `TURN LOCK` press counts as an attempt, and failed turns apply the configured pick damage.
+
+### Lockpick modes
+- `lockpicks.minigame.enabled: false` -> legacy RNG mode (uses `open-chance` and `normal-key-chance`).
+- `lockpicks.minigame.enabled: true` -> pin minigame mode.
+
+### Minigame mode
+- Opens a custom inventory UI (pins as columns, depths as rows).
+- Left click: select depth for a pin. Right click: eliminate candidate.
+- `TURN LOCK` consumes one attempt and evaluates selected pins.
+- Success requires all selected depths to match the secret pinout.
+- Bossbar feedback:
+  - Normal fail: yellow turn distance, then red `Chest Locked!`, then reset.
+  - Hard lockout fail: red `Locked Out` (no turn-distance animation).
+  - Success: fills to full, flashes green `Chest Unlocked!`, then unlocks and opens the container.
+- Optional visual feedback alternative (inside GUI):
+  - Side columns rise with turn distance, then flash red/green on fail/success.
+  - Inventory title behavior:
+    - Idle title: `Locked Chest`
+    - During feedback events: title changes to status text (`Turn Distance`, `Chest Locked!`, `Locked Out`, `Chest Unlocked!`) with matching color
+    - Returns to `Locked Chest` after the event
+- `lockpicks.minigame.bossbar.enabled` toggles bossbar on/off.
+- `lockpicks.minigame.visual-feedback.enabled` toggles side-column feedback on/off.
+- Session ownership: only one active picker per container.
+- Session timeout: controlled by `lockpicks.minigame.session-timeout-seconds`.
+- Pin regeneration on lockout/over-limit turn is configurable per lock type:
+  - Trial default: stable pinout (`regenerate-on-attempt: false`)
+  - Ominous default: reroll on lockout/over-limit (`regenerate-on-attempt: true`)
+
+![Unlock](https://i.imgur.com/XqbXqyE.png)
+![Almost](https://i.imgur.com/bjYTngr.png)
+![Fail](https://i.imgur.com/QrSLi7u.png)
+
 
 ### Resource pack
 Item model overrides and textures are provided in `src/main/resources/resourcepack`. Use this folder as a resource pack to see the lock pick textures in-hand and in inventories.
@@ -36,7 +70,7 @@ Item model overrides and textures are provided in `src/main/resources/resourcepa
 A prepackaged zip will be provided in the releases page along with the compiled binary of this plugin.
 
 ## Data
-Lock data is stored in `plugins/OminousChestLock/data.yml`. Entries include the key name, creator, and last user. If enabled, it will also show information about who tried to pick the lock as well as information about their attempt.
+Lock data is stored in `plugins/OminousChestLock/data.yml`. Entries include the key name, creator, and last user. If enabled, it also stores lockpick attempt/lockout state and minigame pin data.
 
 Unlocked chests are removed from the ```data.yml```.
 
@@ -68,19 +102,30 @@ locked-chests:
         attempts: 3
         over-limit-attempts: 3
         penalty-timestamp: 1767877437911
+    minigame:
+      type: ominous
+      pins: 6
+      depths: 6
+      secret: [1, 4, 2, 5, 0, 3]
+      created: 1767877437911
+      salt-version: 1
 ```
 
 ## Admin commands
 Requires `chestlock.admin` (default: op).
 
-- `/chestlock info` - Show key name, creator, and last user for the looked-at container.
+- `/chestlock info` - Show key name, creator, last user, and minigame pin combo for the looked-at container.
 - `/chestlock unlock` - Force unlock the looked-at container.
 - `/chestlock keyinfo` - Show the locked container location and owner info for the key in hand.
 - `/chestlock reload` - Reload lock data from disk.
 - `/chestlock loglevel <0-3>` - Set log verbosity.
 - `/chestlock normalkeys <on|off>` - Allow normal trial keys.
 - `/chestlock lockpicks <on|off>` - Allow lock picking and crafting.
+- `/chestlock minigame <on|off>` - Toggle lockpick minigame mode.
+- `/chestlock minigamebossbar <on|off>` - Toggle bossbar feedback for minigame.
+- `/chestlock minigamevisual <on|off>` - Toggle side-column visual feedback for minigame.
 - `/chestlock lockoutscope <chest|player>` - Set lockout scope.
+- `/chestlock settings` - Show current loaded settings with color formatting.
 - `/chestlock give <player> <rusty|normal|silence> [amount]` - Give lock picks to a player.
 - `/chestlock help` - Show help.
 
@@ -109,6 +154,21 @@ Config in `plugins/OminousChestLock/config.yml`:
   - `break-chance` = break chance per attempt (0.0–1.0)
   - `damage` = hearts of damage per failed attempt
   - `penalty-reset-minutes` = silence pick over-limit reset time (minutes)
+- `lockpicks.minigame.*`:
+  - `enabled` = use minigame instead of RNG pick chances
+  - `trial.pins` / `trial.depths` = trial lock minigame size
+  - `trial.assist-eliminate-one` = optional trial helper
+  - `trial.regenerate-on-attempt` = reroll trial secret on lockout/over-limit turn
+  - `ominous.pins` / `ominous.depths` = ominous lock minigame size
+  - `ominous.regenerate-on-attempt` = reroll ominous secret on lockout/over-limit turn
+  - `session-timeout-seconds` = auto-timeout for active sessions
+  - `bossbar.enabled` = enable/disable bossbar feedback
+  - `bossbar.animate-ticks` / `bossbar.peak-hold-ticks` / `bossbar.snapback-delay-ticks` = turn bar timing
+  - `visual-feedback.enabled` = enable/disable side-column turn feedback
+  - `visual-feedback.rename-inventory-title` = show status text in inventory title
+  - `sounds.click-per-correct-pin` = click sequence feedback mode
+  - `security.require-holding-pick` = must keep matching pick in hand
+  - `salt` + `salt-version` = seed inputs for first-time secret generation
 
 Example:
 ```yaml
@@ -143,6 +203,32 @@ lockpicks:
     damage: 4.0
     # time until over-limit penalty resets
     penalty-reset-minutes: 60
+  minigame:
+    enabled: true
+    trial:
+      pins: 4
+      depths: 4
+      assist-eliminate-one: true
+      regenerate-on-attempt: false
+    ominous:
+      pins: 6
+      depths: 6
+      regenerate-on-attempt: true
+    session-timeout-seconds: 90
+    bossbar:
+      enabled: true
+      animate-ticks: 12
+      peak-hold-ticks: 20
+      snapback-delay-ticks: 20
+    visual-feedback:
+      enabled: true
+      rename-inventory-title: true
+    sounds:
+      click-per-correct-pin: true
+    security:
+      require-holding-pick: true
+    salt: "change-me"
+    salt-version: 1
 ```
 
 ### Example log entries
@@ -155,6 +241,7 @@ lockpicks:
 [OminousChestLock] BREAK_ALLOWED actor=CevAPI usedKey=secretkeeey lockKey=secretkeeey creator=CevAPI lastUser=CevAPI location=test:-6,104,37 (OVERWORLD)
 [OminousChestLock] PICK_FAIL actor=CevAPI usedKey=none lockKey=secretkeeey creator=Bingo lastUser=Bingo location=test:-6,104,37 (OVERWORLD) detail=pick=rusty
 [OminousChestLock] PICK_SUCCESS actor=CevAPI usedKey=none lockKey=secretkeeey creator=Bingo lastUser=Bingo location=test:-6,104,37 (OVERWORLD) detail=pick=normal
+[OminousChestLock] PICK_FAIL actor=CevAPI usedKey=none lockKey=secretkeeey creator=Bingo lastUser=Bingo location=test:-40,64,-82 (OVERWORLD) detail=pick=silence mode=minigame combo=1-4-5-?-?-? actual=1-4-5-5-6-4 limit=9/16 untilLimit=7
 ```
 
 ## Build
@@ -167,4 +254,3 @@ Fabric jar: `fabric/build/libs/OminousChestLock-1.x.0_Fabric.jar`
 
 ## Permissions
 - `chestlock.admin` - Allows use of admin commands (default: op).
-

@@ -29,3 +29,29 @@ lockpicks:
     damage: 4.0
     # time until over-limit penalty resets
     penalty-reset-minutes: 60
+  minigame:
+    enabled: true
+    trial:
+      pins: 4
+      depths: 4
+      assist-eliminate-one: true
+      regenerate-on-attempt: false
+    ominous:
+      pins: 6
+      depths: 6
+      regenerate-on-attempt: true
+    session-timeout-seconds: 90
+    bossbar:
+      enabled: true
+      animate-ticks: 12
+      peak-hold-ticks: 20
+      snapback-delay-ticks: 20
+    visual-feedback:
+      enabled: true
+      rename-inventory-title: true
+    sounds:
+      click-per-correct-pin: true
+    security:
+      require-holding-pick: true
+    salt: "change-me"
+    salt-version: 1
