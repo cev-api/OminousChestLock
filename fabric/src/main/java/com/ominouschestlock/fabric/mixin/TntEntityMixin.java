@@ -1,6 +1,6 @@
-package com.example.chestlock.fabric.mixin;
+package com.ominouschestlock.fabric.mixin;
 
-import com.example.chestlock.fabric.ChestLockFabric;
+import com.ominouschestlock.fabric.ChestLockFabric;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.item.PrimedTnt;
 import net.minecraft.server.level.ServerPlayer;
@@ -19,3 +19,5 @@ public abstract class TntEntityMixin {
         }
     }
 }
+
+

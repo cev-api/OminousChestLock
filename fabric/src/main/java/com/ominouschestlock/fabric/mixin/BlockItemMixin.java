@@ -1,6 +1,6 @@
-package com.example.chestlock.fabric.mixin;
+package com.ominouschestlock.fabric.mixin;
 
-import com.example.chestlock.fabric.ChestLockFabric;
+import com.ominouschestlock.fabric.ChestLockFabric;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.context.BlockPlaceContext;
@@ -30,3 +30,5 @@ public abstract class BlockItemMixin {
         }
     }
 }
+
+

@@ -1,6 +1,6 @@
-package com.example.chestlock.fabric.mixin;
+package com.ominouschestlock.fabric.mixin;
 
-import com.example.chestlock.fabric.ChestLockFabric;
+import com.ominouschestlock.fabric.ChestLockFabric;
 import net.minecraft.world.level.block.entity.HopperBlockEntity;
 import net.minecraft.world.Container;
 import net.minecraft.server.level.ServerLevel;
@@ -30,3 +30,5 @@ public abstract class HopperBlockEntityMixin {
         }
     }
 }
+
+

@@ -1,6 +1,6 @@
 {
   "required": true,
-  "package": "com.example.chestlock.fabric.mixin",
+  "package": "com.ominouschestlock.fabric.mixin",
   "compatibilityLevel": "JAVA_21",
   "refmap": "ominouschestlock.refmap.json",
   "mixins": [
@@ -18,3 +18,5 @@
     "defaultRequire": 1
   }
 }
+
+

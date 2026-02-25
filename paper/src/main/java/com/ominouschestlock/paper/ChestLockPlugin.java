@@ -1,6 +1,8 @@
-package com.example.chestlock;
+package com.ominouschestlock.paper;
 
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -132,7 +134,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         }
 
         if (!sender.hasPermission("chestlock.admin")) {
-            sender.sendMessage(Component.text("You do not have permission."));
+            sender.sendMessage(errorLine("You do not have permission."));
             return true;
         }
 
@@ -145,87 +147,89 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         switch (sub) {
             case "info" -> {
                 if (!(sender instanceof Player player)) {
-                    sender.sendMessage(Component.text("This command can only be used by players."));
+                    sender.sendMessage(errorLine("This command can only be used by players."));
                     return true;
                 }
                 Block target = player.getTargetBlockExact(5);
                 if (target == null || !isLockable(target)) {
-                    player.sendMessage(Component.text("Look at a chest, barrel, or shulker within 5 blocks."));
+                    player.sendMessage(errorLine("Look at a chest, barrel, or shulker within 5 blocks."));
                     return true;
                 }
                 LockInfo lockInfo = getLockInfo(target);
                 if (lockInfo == null) {
-                    player.sendMessage(Component.text("That container is not locked."));
+                    player.sendMessage(errorLine("That container is not locked."));
                     return true;
                 }
                 String creator = lockInfo.creatorName() == null ? "unknown" : lockInfo.creatorName();
                 String lastUser = lockInfo.lastUserName() == null ? "unknown" : lockInfo.lastUserName();
-                player.sendMessage(Component.text("Locked with key name: " + lockInfo.keyName()));
-                player.sendMessage(Component.text("Created by: " + creator));
-                player.sendMessage(Component.text("Last used by: " + lastUser));
+                player.sendMessage(statusLine("Lock details"));
+                player.sendMessage(detailLine("Key", lockInfo.keyName(), NamedTextColor.AQUA));
+                player.sendMessage(detailLine("Created by", creator, NamedTextColor.GREEN));
+                player.sendMessage(detailLine("Last used by", lastUser, NamedTextColor.GREEN));
                 PickState state = getPickState(lockInfo, player);
-                player.sendMessage(Component.text("Rusty pick: " + formatPickStatus(state.rustyAttempts(), state.rustyLimit())));
-                player.sendMessage(Component.text("Normal pick: " + formatPickStatus(state.normalAttempts(), state.normalLimit())));
-                player.sendMessage(Component.text("Silence pick: " + formatSilenceStatus(state)));
+                player.sendMessage(detailLine("Rusty pick", formatPickStatus(state.rustyAttempts(), state.rustyLimit()), NamedTextColor.GOLD));
+                player.sendMessage(detailLine("Normal pick", formatPickStatus(state.normalAttempts(), state.normalLimit()), NamedTextColor.YELLOW));
+                player.sendMessage(detailLine("Silence pick", formatSilenceStatus(state), NamedTextColor.LIGHT_PURPLE));
                 if (lockInfo.lastPickUserName() != null && lockInfo.lastPickType() != null) {
                     String when = lockInfo.lastPickTimestamp() > 0L
                             ? formatDuration(System.currentTimeMillis() - lockInfo.lastPickTimestamp()) + " ago"
                             : "unknown time";
-                    player.sendMessage(Component.text("Last pick attempt: " + lockInfo.lastPickUserName()
-                            + " with " + lockInfo.lastPickType() + " (" + when + ")"));
+                    player.sendMessage(detailLine("Last pick attempt", lockInfo.lastPickUserName()
+                            + " with " + lockInfo.lastPickType() + " (" + when + ")", NamedTextColor.LIGHT_PURPLE));
                 }
                 return true;
             }
             case "unlock" -> {
                 if (!(sender instanceof Player player)) {
-                    sender.sendMessage(Component.text("This command can only be used by players."));
+                    sender.sendMessage(errorLine("This command can only be used by players."));
                     return true;
                 }
                 Block target = player.getTargetBlockExact(5);
                 if (target == null || !isLockable(target)) {
-                    player.sendMessage(Component.text("Look at a chest, barrel, or shulker within 5 blocks."));
+                    player.sendMessage(errorLine("Look at a chest, barrel, or shulker within 5 blocks."));
                     return true;
                 }
                 LockInfo lockInfo = getLockInfo(target);
                 if (lockInfo == null) {
-                    player.sendMessage(Component.text("That container is not locked."));
+                    player.sendMessage(errorLine("That container is not locked."));
                     return true;
                 }
                 unlock(target, lockInfo.keyName());
-                player.sendMessage(Component.text("Unlocked container (key name was: " + lockInfo.keyName() + ")."));
+                player.sendMessage(successLine("Unlocked container (key name was: " + lockInfo.keyName() + ")."));
                 return true;
             }
             case "keyinfo" -> {
                 if (!(sender instanceof Player player)) {
-                    sender.sendMessage(Component.text("This command can only be used by players."));
+                    sender.sendMessage(errorLine("This command can only be used by players."));
                     return true;
                 }
                 String keyName = getHeldKeyName(player);
                 if (keyName == null) {
-                    player.sendMessage(Component.text("Hold a named ominous trial key in your main hand or off hand."));
+                    player.sendMessage(errorLine("Hold a named ominous trial key in your main hand or off hand."));
                     return true;
                 }
                 String locationKey = keyToChest.get(keyName);
                 if (locationKey == null) {
-                    player.sendMessage(Component.text("No locked container found for key name: " + keyName));
+                    player.sendMessage(errorLine("No locked container found for key name: " + keyName));
                     return true;
                 }
                 LockInfo lockInfo = lockedChests.get(locationKey);
                 if (lockInfo == null) {
-                    player.sendMessage(Component.text("Lock data missing for key name: " + keyName));
+                    player.sendMessage(errorLine("Lock data missing for key name: " + keyName));
                     return true;
                 }
                 LocationData locationData = parseLocationKey(locationKey);
                 String creator = lockInfo.creatorName() == null ? "unknown" : lockInfo.creatorName();
                 String lastUser = lockInfo.lastUserName() == null ? "unknown" : lockInfo.lastUserName();
-                player.sendMessage(Component.text("Key name: " + lockInfo.keyName()));
+                player.sendMessage(statusLine("Key details"));
+                player.sendMessage(detailLine("Key", lockInfo.keyName(), NamedTextColor.AQUA));
                 if (locationData != null && locationData.realm() != null) {
-                    player.sendMessage(Component.text("Locked container: " + locationKey + " (" + locationData.realm() + ")"));
+                    player.sendMessage(detailLine("Locked container", locationKey + " (" + locationData.realm() + ")", NamedTextColor.GREEN));
                 } else {
-                    player.sendMessage(Component.text("Locked container: " + locationKey));
+                    player.sendMessage(detailLine("Locked container", locationKey, NamedTextColor.GREEN));
                 }
-                player.sendMessage(Component.text("Created by: " + creator));
-                player.sendMessage(Component.text("Last used by: " + lastUser));
+                player.sendMessage(detailLine("Created by", creator, NamedTextColor.GREEN));
+                player.sendMessage(detailLine("Last used by", lastUser, NamedTextColor.GREEN));
                 return true;
             }
             case "reload" -> {
@@ -233,23 +237,23 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 loadConfigValues();
                 loadData();
                 updatePickRecipes();
-                sender.sendMessage(Component.text("ChestLock data reloaded."));
+                sender.sendMessage(successLine("ChestLock data reloaded."));
                 return true;
             }
             case "give" -> {
                 if (args.length < 3) {
-                    sender.sendMessage(Component.text("Usage: /chestlock give <player> <rusty|normal|silence> [amount]"));
+                    sender.sendMessage(errorLine("Usage: /chestlock give <player> <rusty|normal|silence> [amount]"));
                     return true;
                 }
                 String playerName = args[1];
                 Player target = Bukkit.getPlayerExact(playerName);
                 if (target == null) {
-                    sender.sendMessage(Component.text("Player not found: " + playerName));
+                    sender.sendMessage(errorLine("Player not found: " + playerName));
                     return true;
                 }
                 PickType pickType = parsePickType(args[2]);
                 if (pickType == null) {
-                    sender.sendMessage(Component.text("Pick type must be rusty, normal, or silence."));
+                    sender.sendMessage(errorLine("Pick type must be rusty, normal, or silence."));
                     return true;
                 }
                 int amount = 1;
@@ -257,12 +261,12 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                     try {
                         amount = Integer.parseInt(args[3]);
                     } catch (NumberFormatException ex) {
-                        sender.sendMessage(Component.text("Amount must be a number."));
+                        sender.sendMessage(errorLine("Amount must be a number."));
                         return true;
                     }
                 }
                 if (amount <= 0) {
-                    sender.sendMessage(Component.text("Amount must be at least 1."));
+                    sender.sendMessage(errorLine("Amount must be at least 1."));
                     return true;
                 }
                 ItemStack stack = createPick(pickType);
@@ -271,81 +275,81 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 for (ItemStack extra : overflow.values()) {
                     target.getWorld().dropItemNaturally(target.getLocation(), extra);
                 }
-                sender.sendMessage(Component.text("Gave " + amount + " " + pickType.id + " pick(s) to " + target.getName() + "."));
+                sender.sendMessage(successLine("Gave " + amount + " " + pickType.id + " pick(s) to " + target.getName() + "."));
                 return true;
             }
             case "loglevel" -> {
                 if (args.length < 2) {
-                    sender.sendMessage(Component.text("Current log level: " + logLevel));
-                    sender.sendMessage(Component.text("Usage: /chestlock loglevel <0-3>"));
+                    sender.sendMessage(detailLine("Current log level", String.valueOf(logLevel), NamedTextColor.GOLD));
+                    sender.sendMessage(errorLine("Usage: /chestlock loglevel <0-3>"));
                     return true;
                 }
                 try {
                     int level = Integer.parseInt(args[1]);
                     if (level < 0 || level > 3) {
-                        sender.sendMessage(Component.text("Log level must be between 0 and 3."));
+                        sender.sendMessage(errorLine("Log level must be between 0 and 3."));
                         return true;
                     }
                     logLevel = level;
                     getConfig().set("logging.level", level);
                     saveConfig();
-                    sender.sendMessage(Component.text("Logging level set to " + level + "."));
+                    sender.sendMessage(successLine("Logging level set to " + level + "."));
                 } catch (NumberFormatException ex) {
-                    sender.sendMessage(Component.text("Log level must be a number between 0 and 3."));
+                    sender.sendMessage(errorLine("Log level must be a number between 0 and 3."));
                 }
                 return true;
             }
             case "normalkeys" -> {
                 if (args.length < 2) {
-                    sender.sendMessage(Component.text("Normal trial keys are " + (allowNormalKeys ? "enabled." : "disabled.")));
-                    sender.sendMessage(Component.text("Usage: /chestlock normalkeys <on|off>"));
+                    sender.sendMessage(detailLine("Normal trial keys", allowNormalKeys ? "enabled" : "disabled", allowNormalKeys ? NamedTextColor.GREEN : NamedTextColor.RED));
+                    sender.sendMessage(errorLine("Usage: /chestlock normalkeys <on|off>"));
                     return true;
                 }
                 String value = args[1].toLowerCase();
                 if (!value.equals("on") && !value.equals("off")) {
-                    sender.sendMessage(Component.text("Usage: /chestlock normalkeys <on|off>"));
+                    sender.sendMessage(errorLine("Usage: /chestlock normalkeys <on|off>"));
                     return true;
                 }
                 allowNormalKeys = value.equals("on");
                 getConfig().set("keys.allow-normal", allowNormalKeys);
                 saveConfig();
-                sender.sendMessage(Component.text("Normal trial keys are now " + (allowNormalKeys ? "enabled." : "disabled.")));
+                sender.sendMessage(successLine("Normal trial keys are now " + (allowNormalKeys ? "enabled." : "disabled.")));
                 return true;
             }
             case "lockpicks" -> {
                 if (args.length < 2) {
-                    sender.sendMessage(Component.text("Lockpicking is " + (allowLockpicks ? "enabled." : "disabled.")));
-                    sender.sendMessage(Component.text("Usage: /chestlock lockpicks <on|off>"));
+                    sender.sendMessage(detailLine("Lockpicking", allowLockpicks ? "enabled" : "disabled", allowLockpicks ? NamedTextColor.GREEN : NamedTextColor.RED));
+                    sender.sendMessage(errorLine("Usage: /chestlock lockpicks <on|off>"));
                     return true;
                 }
                 String value = args[1].toLowerCase();
                 if (!value.equals("on") && !value.equals("off")) {
-                    sender.sendMessage(Component.text("Usage: /chestlock lockpicks <on|off>"));
+                    sender.sendMessage(errorLine("Usage: /chestlock lockpicks <on|off>"));
                     return true;
                 }
                 allowLockpicks = value.equals("on");
                 getConfig().set("lockpicks.enabled", allowLockpicks);
                 saveConfig();
                 updatePickRecipes();
-                sender.sendMessage(Component.text("Lockpicking is now " + (allowLockpicks ? "enabled." : "disabled.")));
+                sender.sendMessage(successLine("Lockpicking is now " + (allowLockpicks ? "enabled." : "disabled.")));
                 return true;
             }
             case "lockoutscope" -> {
                 if (args.length < 2) {
-                    sender.sendMessage(Component.text("Lockout scope is " + lockoutScope.name().toLowerCase() + "."));
-                    sender.sendMessage(Component.text("Usage: /chestlock lockoutscope <chest|player>"));
+                    sender.sendMessage(detailLine("Lockout scope", lockoutScope.name().toLowerCase(), NamedTextColor.AQUA));
+                    sender.sendMessage(errorLine("Usage: /chestlock lockoutscope <chest|player>"));
                     return true;
                 }
                 String value = args[1].toLowerCase();
                 LockoutScope scope = LockoutScope.fromConfig(value);
                 if (!value.equals("chest") && !value.equals("player")) {
-                    sender.sendMessage(Component.text("Usage: /chestlock lockoutscope <chest|player>"));
+                    sender.sendMessage(errorLine("Usage: /chestlock lockoutscope <chest|player>"));
                     return true;
                 }
                 lockoutScope = scope;
                 getConfig().set("lockpicks.lockout-scope", scope.name().toLowerCase());
                 saveConfig();
-                sender.sendMessage(Component.text("Lockout scope set to " + scope.name().toLowerCase() + "."));
+                sender.sendMessage(successLine("Lockout scope set to " + scope.name().toLowerCase() + "."));
                 return true;
             }
             default -> {
@@ -389,15 +393,43 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     }
 
     private void sendHelp(CommandSender sender) {
-        sender.sendMessage(Component.text("/chestlock info - show lock key name for looked-at container"));
-        sender.sendMessage(Component.text("/chestlock unlock - force unlock looked-at container"));
-        sender.sendMessage(Component.text("/chestlock keyinfo - show lock info for key in hand"));
-        sender.sendMessage(Component.text("/chestlock reload - reload lock data from disk"));
-        sender.sendMessage(Component.text("/chestlock loglevel <0-3> - set log verbosity"));
-        sender.sendMessage(Component.text("/chestlock normalkeys <on|off> - allow normal trial keys"));
-        sender.sendMessage(Component.text("/chestlock lockpicks <on|off> - allow lock picking and crafting"));
-        sender.sendMessage(Component.text("/chestlock lockoutscope <chest|player> - set lockout scope"));
-        sender.sendMessage(Component.text("/chestlock give <player> <rusty|normal|silence> [amount] - give lock picks"));
+        sender.sendMessage(statusLine("ChestLock commands"));
+        sender.sendMessage(helpLine("/chestlock info", "show lock key name for looked-at container"));
+        sender.sendMessage(helpLine("/chestlock unlock", "force unlock looked-at container"));
+        sender.sendMessage(helpLine("/chestlock keyinfo", "show lock info for key in hand"));
+        sender.sendMessage(helpLine("/chestlock reload", "reload lock data from disk"));
+        sender.sendMessage(helpLine("/chestlock loglevel <0-3>", "set log verbosity"));
+        sender.sendMessage(helpLine("/chestlock normalkeys <on|off>", "allow normal trial keys"));
+        sender.sendMessage(helpLine("/chestlock lockpicks <on|off>", "allow lock picking and crafting"));
+        sender.sendMessage(helpLine("/chestlock lockoutscope <chest|player>", "set lockout scope"));
+        sender.sendMessage(helpLine("/chestlock give <player> <rusty|normal|silence> [amount]", "give lock picks"));
+    }
+
+    private Component statusLine(String text) {
+        return Component.text(">> ", NamedTextColor.DARK_GREEN, TextDecoration.BOLD)
+                .append(Component.text(text, NamedTextColor.GREEN));
+    }
+
+    private Component successLine(String text) {
+        return Component.text(">> ", NamedTextColor.DARK_GREEN, TextDecoration.BOLD)
+                .append(Component.text(text, NamedTextColor.GREEN));
+    }
+
+    private Component errorLine(String text) {
+        return Component.text(">> ", NamedTextColor.DARK_RED, TextDecoration.BOLD)
+                .append(Component.text(text, NamedTextColor.RED));
+    }
+
+    private Component detailLine(String label, String value, NamedTextColor valueColor) {
+        return Component.text(label + ": ", NamedTextColor.YELLOW)
+                .append(Component.text(value, valueColor));
+    }
+
+    private Component helpLine(String command, String description) {
+        return Component.text("• ", NamedTextColor.DARK_GREEN)
+                .append(Component.text(command, NamedTextColor.AQUA))
+                .append(Component.text(" - ", NamedTextColor.DARK_GRAY))
+                .append(Component.text(description, NamedTextColor.GREEN));
     }
 
     private PickType parsePickType(String value) {
@@ -560,7 +592,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private void handlePickAttempt(PlayerInteractEvent event, Block block, LockInfo lockInfo, PickMatch pickMatch) {
         if (!allowLockpicks) {
             event.setCancelled(true);
-            event.getPlayer().sendMessage(Component.text("Lockpicking is disabled."));
+            event.getPlayer().sendMessage(errorLine("Lockpicking is disabled."));
             return;
         }
         List<Location> locations = resolveLockLocations(block);
@@ -1801,188 +1833,6 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         }
     }
 
-    private static final class LockInfo {
-        private final String keyName;
-        private final String creatorName;
-        private final UUID creatorUuid;
-        private final String lastUserName;
-        private final UUID lastUserUuid;
-        private final boolean normalKey;
-        private final boolean normalArmed;
-        private final String lastPickUserName;
-        private final UUID lastPickUserUuid;
-        private final String lastPickType;
-        private final long lastPickTimestamp;
-        private final int rustyLimit;
-        private final int rustyAttempts;
-        private final int normalLimit;
-        private final int normalAttempts;
-        private final int silenceLimit;
-        private final int silenceAttempts;
-        private final int silenceOverLimitAttempts;
-        private final long silencePenaltyTimestamp;
-        private final Map<UUID, PickState> playerPickStates;
-
-        private LockInfo(String keyName, String creatorName, UUID creatorUuid, String lastUserName, UUID lastUserUuid,
-                         boolean normalKey, boolean normalArmed,
-                         String lastPickUserName, UUID lastPickUserUuid, String lastPickType, long lastPickTimestamp,
-                         int rustyLimit, int rustyAttempts,
-                         int normalLimit, int normalAttempts,
-                         int silenceLimit, int silenceAttempts,
-                         int silenceOverLimitAttempts, long silencePenaltyTimestamp,
-                         Map<UUID, PickState> playerPickStates) {
-            this.keyName = keyName;
-            this.creatorName = creatorName;
-            this.creatorUuid = creatorUuid;
-            this.lastUserName = lastUserName;
-            this.lastUserUuid = lastUserUuid;
-            this.normalKey = normalKey;
-            this.normalArmed = normalArmed;
-            this.lastPickUserName = lastPickUserName;
-            this.lastPickUserUuid = lastPickUserUuid;
-            this.lastPickType = lastPickType;
-            this.lastPickTimestamp = lastPickTimestamp;
-            this.rustyLimit = rustyLimit;
-            this.rustyAttempts = rustyAttempts;
-            this.normalLimit = normalLimit;
-            this.normalAttempts = normalAttempts;
-            this.silenceLimit = silenceLimit;
-            this.silenceAttempts = silenceAttempts;
-            this.silenceOverLimitAttempts = silenceOverLimitAttempts;
-            this.silencePenaltyTimestamp = silencePenaltyTimestamp;
-            this.playerPickStates = playerPickStates == null ? new HashMap<>() : new HashMap<>(playerPickStates);
-        }
-
-        private String keyName() {
-            return keyName;
-        }
-
-        private String creatorName() {
-            return creatorName;
-        }
-
-        private UUID creatorUuid() {
-            return creatorUuid;
-        }
-
-        private String lastUserName() {
-            return lastUserName;
-        }
-
-        private UUID lastUserUuid() {
-            return lastUserUuid;
-        }
-
-        private boolean normalKey() {
-            return normalKey;
-        }
-
-        private boolean normalArmed() {
-            return normalArmed;
-        }
-
-        private String lastPickUserName() {
-            return lastPickUserName;
-        }
-
-        private UUID lastPickUserUuid() {
-            return lastPickUserUuid;
-        }
-
-        private String lastPickType() {
-            return lastPickType;
-        }
-
-        private long lastPickTimestamp() {
-            return lastPickTimestamp;
-        }
-
-        private int rustyLimit() {
-            return rustyLimit;
-        }
-
-        private int rustyAttempts() {
-            return rustyAttempts;
-        }
-
-        private int normalLimit() {
-            return normalLimit;
-        }
-
-        private int normalAttempts() {
-            return normalAttempts;
-        }
-
-        private int silenceLimit() {
-            return silenceLimit;
-        }
-
-        private int silenceAttempts() {
-            return silenceAttempts;
-        }
-
-        private int silenceOverLimitAttempts() {
-            return silenceOverLimitAttempts;
-        }
-
-        private long silencePenaltyTimestamp() {
-            return silencePenaltyTimestamp;
-        }
-
-        private Map<UUID, PickState> playerPickStates() {
-            return playerPickStates;
-        }
-
-        private PickState toPickState() {
-            return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp);
-        }
-
-        private LockInfo withLastUser(Player player) {
-            return new LockInfo(keyName, creatorName, creatorUuid, player.getName(), player.getUniqueId(), normalKey, normalArmed,
-                    lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
-                    rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates);
-        }
-
-        private LockInfo withNormalArmed(boolean armed) {
-            return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, armed,
-                    lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
-                    rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates);
-        }
-
-        private LockInfo withLastPick(Player player, PickType pickType, long timestamp) {
-            return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed,
-                    player.getName(), player.getUniqueId(), pickType.id, timestamp,
-                    rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates);
-        }
-
-        private LockInfo withPickState(PickState state) {
-            if (state == null) {
-                return this;
-            }
-            return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed,
-                    lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
-                    state.rustyLimit(), state.rustyAttempts(), state.normalLimit(), state.normalAttempts(),
-                    state.silenceLimit(), state.silenceAttempts(), state.silenceOverLimitAttempts(),
-                    state.silencePenaltyTimestamp(), playerPickStates);
-        }
-
-        private LockInfo withPlayerPickState(UUID playerId, PickState state) {
-            if (playerId == null || state == null) {
-                return this;
-            }
-            Map<UUID, PickState> updatedStates = new HashMap<>(playerPickStates);
-            updatedStates.put(playerId, state);
-            return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed,
-                    lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
-                    rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp, updatedStates);
-        }
-    }
-
     private LocationData parseLocationKey(String locationKey) {
         if (locationKey == null) {
             return null;
@@ -2022,107 +1872,5 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         };
     }
 
-    private record LocationData(String worldName, int x, int y, int z, String realm, UUID worldUuid) {
-    }
-
-    private record PendingIgnite(String playerName, long timestamp) {
-    }
-
-    private record HopperOwner(String playerName, long timestamp) {
-    }
-
-    private record KeyMatch(String name, EquipmentSlot slot, boolean normal) {
-    }
-
-    private record PickMatch(PickType type, EquipmentSlot slot) {
-    }
-
-    private record PickState(int rustyLimit, int rustyAttempts,
-                             int normalLimit, int normalAttempts,
-                             int silenceLimit, int silenceAttempts,
-                             int silenceOverLimitAttempts, long silencePenaltyTimestamp) {
-        private static PickState empty() {
-            return new PickState(-1, 0, -1, 0, -1, 0, 0, 0L);
-        }
-
-        private PickState withRustyLimit(int limit) {
-            return new PickState(limit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp);
-        }
-
-        private PickState withRustyAttempts(int attempts) {
-            return new PickState(rustyLimit, attempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp);
-        }
-
-        private PickState withNormalLimit(int limit) {
-            return new PickState(rustyLimit, rustyAttempts, limit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp);
-        }
-
-        private PickState withNormalAttempts(int attempts) {
-            return new PickState(rustyLimit, rustyAttempts, normalLimit, attempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp);
-        }
-
-        private PickState withSilenceLimit(int limit) {
-            return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, limit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp);
-        }
-
-        private PickState withSilenceAttempts(int attempts) {
-            return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, attempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp);
-        }
-
-        private PickState withSilenceOverLimitAttempts(int attempts) {
-            return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    attempts, silencePenaltyTimestamp);
-        }
-
-        private PickState withSilencePenaltyTimestamp(long timestamp) {
-            return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, timestamp);
-        }
-    }
-
-    private enum LockoutScope {
-        CHEST,
-        PLAYER;
-
-        private static LockoutScope fromConfig(String value) {
-            if (value == null) {
-                return CHEST;
-            }
-            return switch (value.toLowerCase()) {
-                case "player" -> PLAYER;
-                default -> CHEST;
-            };
-        }
-    }
-
-    private enum PickType {
-        RUSTY("rusty", "Rusty Lock Pick", RUSTY_MODEL_DATA),
-        NORMAL("normal", "Lock Pick", NORMAL_MODEL_DATA),
-        SILENCE("silence", "Silence Lock Pick", SILENCE_MODEL_DATA);
-
-        private final String id;
-        private final String displayName;
-        private final int modelData;
-
-        PickType(String id, String displayName, int modelData) {
-            this.id = id;
-            this.displayName = displayName;
-            this.modelData = modelData;
-        }
-
-        private static PickType fromId(String id) {
-            for (PickType type : values()) {
-                if (type.id.equalsIgnoreCase(id)) {
-                    return type;
-                }
-            }
-            return null;
-        }
-    }
 }
+

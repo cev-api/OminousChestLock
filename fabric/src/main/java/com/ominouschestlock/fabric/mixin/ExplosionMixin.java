@@ -1,6 +1,6 @@
-package com.example.chestlock.fabric.mixin;
+package com.ominouschestlock.fabric.mixin;
 
-import com.example.chestlock.fabric.ChestLockFabric;
+import com.ominouschestlock.fabric.ChestLockFabric;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Explosion;
@@ -25,3 +25,5 @@ public abstract class ExplosionMixin {
         }
     }
 }
+
+

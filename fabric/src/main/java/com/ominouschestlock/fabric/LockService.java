@@ -1,9 +1,10 @@
 
-package com.example.chestlock.fabric;
+package com.ominouschestlock.fabric;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import net.minecraft.ChatFormatting;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.Blocks;
@@ -235,35 +236,36 @@ public final class LockService {
                     }
                     BlockHitResult hit = raycastBlock(player, 5.0);
                     if (hit == null) {
-                        ctx.getSource().sendSystemMessage(Component.literal("Look at a chest, barrel, or shulker within 5 blocks."));
+                        ctx.getSource().sendSystemMessage(errorLine("Look at a chest, barrel, or shulker within 5 blocks."));
                         return 1;
                     }
                     BlockPos pos = hit.getBlockPos();
                     BlockState state = player.level().getBlockState(pos);
                     if (!isLockable(state)) {
-                        ctx.getSource().sendSystemMessage(Component.literal("Look at a chest, barrel, or shulker within 5 blocks."));
+                        ctx.getSource().sendSystemMessage(errorLine("Look at a chest, barrel, or shulker within 5 blocks."));
                         return 1;
                     }
                     LockInfo lockInfo = getLockInfo(player.level(), resolveLockLocations(player.level(), pos, state));
                     if (lockInfo == null) {
-                        ctx.getSource().sendSystemMessage(Component.literal("That container is not locked."));
+                        ctx.getSource().sendSystemMessage(errorLine("That container is not locked."));
                         return 1;
                     }
                     String creator = lockInfo.creatorName() == null ? "unknown" : lockInfo.creatorName();
                     String lastUser = lockInfo.lastUserName() == null ? "unknown" : lockInfo.lastUserName();
-                    ctx.getSource().sendSystemMessage(Component.literal("Locked with key name: " + lockInfo.keyName()));
-                    ctx.getSource().sendSystemMessage(Component.literal("Created by: " + creator));
-                    ctx.getSource().sendSystemMessage(Component.literal("Last used by: " + lastUser));
+                    ctx.getSource().sendSystemMessage(statusLine("Lock details"));
+                    ctx.getSource().sendSystemMessage(detailLine("Key", lockInfo.keyName(), ChatFormatting.AQUA));
+                    ctx.getSource().sendSystemMessage(detailLine("Created by", creator, ChatFormatting.GREEN));
+                    ctx.getSource().sendSystemMessage(detailLine("Last used by", lastUser, ChatFormatting.GREEN));
                     PickState stateInfo = getPickState(lockInfo, player);
-                    ctx.getSource().sendSystemMessage(Component.literal("Rusty pick: " + formatPickStatus(stateInfo.rustyAttempts(), stateInfo.rustyLimit())));
-                    ctx.getSource().sendSystemMessage(Component.literal("Normal pick: " + formatPickStatus(stateInfo.normalAttempts(), stateInfo.normalLimit())));
-                    ctx.getSource().sendSystemMessage(Component.literal("Silence pick: " + formatSilenceStatus(stateInfo)));
+                    ctx.getSource().sendSystemMessage(detailLine("Rusty pick", formatPickStatus(stateInfo.rustyAttempts(), stateInfo.rustyLimit()), ChatFormatting.GOLD));
+                    ctx.getSource().sendSystemMessage(detailLine("Normal pick", formatPickStatus(stateInfo.normalAttempts(), stateInfo.normalLimit()), ChatFormatting.YELLOW));
+                    ctx.getSource().sendSystemMessage(detailLine("Silence pick", formatSilenceStatus(stateInfo), ChatFormatting.LIGHT_PURPLE));
                     if (lockInfo.lastPickUserName() != null && lockInfo.lastPickType() != null) {
                         String when = lockInfo.lastPickTimestamp() > 0L
                                 ? formatDuration(System.currentTimeMillis() - lockInfo.lastPickTimestamp()) + " ago"
                                 : "unknown time";
-                        ctx.getSource().sendSystemMessage(Component.literal("Last pick attempt: " + lockInfo.lastPickUserName()
-                                + " with " + lockInfo.lastPickType() + " (" + when + ")"));
+                        ctx.getSource().sendSystemMessage(detailLine("Last pick attempt", lockInfo.lastPickUserName()
+                                + " with " + lockInfo.lastPickType() + " (" + when + ")", ChatFormatting.LIGHT_PURPLE));
                     }
                     return 1;
                 }))
@@ -274,23 +276,23 @@ public final class LockService {
                     }
                     BlockHitResult hit = raycastBlock(player, 5.0);
                     if (hit == null) {
-                        ctx.getSource().sendSystemMessage(Component.literal("Look at a chest, barrel, or shulker within 5 blocks."));
+                        ctx.getSource().sendSystemMessage(errorLine("Look at a chest, barrel, or shulker within 5 blocks."));
                         return 1;
                     }
                     BlockPos pos = hit.getBlockPos();
                     BlockState state = player.level().getBlockState(pos);
                     if (!isLockable(state)) {
-                        ctx.getSource().sendSystemMessage(Component.literal("Look at a chest, barrel, or shulker within 5 blocks."));
+                        ctx.getSource().sendSystemMessage(errorLine("Look at a chest, barrel, or shulker within 5 blocks."));
                         return 1;
                     }
                     List<BlockPos> locations = resolveLockLocations(player.level(), pos, state);
                     LockInfo lockInfo = getLockInfo(player.level(), locations);
                     if (lockInfo == null) {
-                        ctx.getSource().sendSystemMessage(Component.literal("That container is not locked."));
+                        ctx.getSource().sendSystemMessage(errorLine("That container is not locked."));
                         return 1;
                     }
                     unlock(player.level(), locations, lockInfo.keyName());
-                    ctx.getSource().sendSystemMessage(Component.literal("Unlocked container (key name was: " + lockInfo.keyName() + ")."));
+                    ctx.getSource().sendSystemMessage(successLine("Unlocked container (key name was: " + lockInfo.keyName() + ")."));
                     return 1;
                 }))
                 .then(literal("keyinfo").executes(ctx -> {
@@ -300,31 +302,32 @@ public final class LockService {
                     }
                     String keyName = getHeldKeyName(player);
                     if (keyName == null) {
-                        ctx.getSource().sendSystemMessage(Component.literal("Hold a named ominous trial key in your main or off hand."));
+                        ctx.getSource().sendSystemMessage(errorLine("Hold a named ominous trial key in your main or off hand."));
                         return 1;
                     }
                     String locationKey = keyToChest.get(keyName);
                     if (locationKey == null) {
-                        ctx.getSource().sendSystemMessage(Component.literal("No locked container found for key name: " + keyName));
+                        ctx.getSource().sendSystemMessage(errorLine("No locked container found for key name: " + keyName));
                         return 1;
                     }
                     LockInfo lockInfo = lockedChests.get(locationKey);
                     if (lockInfo == null) {
-                        ctx.getSource().sendSystemMessage(Component.literal("Lock data missing for key name: " + keyName));
+                        ctx.getSource().sendSystemMessage(errorLine("Lock data missing for key name: " + keyName));
                         return 1;
                     }
-                    ctx.getSource().sendSystemMessage(Component.literal("Key name: " + lockInfo.keyName()));
-                    ctx.getSource().sendSystemMessage(Component.literal("Locked container: " + locationKey));
+                    ctx.getSource().sendSystemMessage(statusLine("Key details"));
+                    ctx.getSource().sendSystemMessage(detailLine("Key", lockInfo.keyName(), ChatFormatting.AQUA));
+                    ctx.getSource().sendSystemMessage(detailLine("Locked container", locationKey, ChatFormatting.GREEN));
                     String creator = lockInfo.creatorName() == null ? "unknown" : lockInfo.creatorName();
                     String lastUser = lockInfo.lastUserName() == null ? "unknown" : lockInfo.lastUserName();
-                    ctx.getSource().sendSystemMessage(Component.literal("Created by: " + creator));
-                    ctx.getSource().sendSystemMessage(Component.literal("Last used by: " + lastUser));
+                    ctx.getSource().sendSystemMessage(detailLine("Created by", creator, ChatFormatting.GREEN));
+                    ctx.getSource().sendSystemMessage(detailLine("Last used by", lastUser, ChatFormatting.GREEN));
                     return 1;
                 }))
                 .then(literal("reload").executes(ctx -> {
                     loadConfigValues();
                     loadData();
-                    ctx.getSource().sendSystemMessage(Component.literal("ChestLock data reloaded."));
+                    ctx.getSource().sendSystemMessage(successLine("ChestLock data reloaded."));
                     return 1;
                 }))
                 .then(literal("give")
@@ -340,11 +343,11 @@ public final class LockService {
                                     int level = IntegerArgumentType.getInteger(ctx, "level");
                                     logLevel = level;
                                     saveConfigValue("logging.level", level);
-                                    ctx.getSource().sendSystemMessage(Component.literal("Logging level set to " + level + "."));
+                                    ctx.getSource().sendSystemMessage(successLine("Logging level set to " + level + "."));
                                     return 1;
                                 }))
                         .executes(ctx -> {
-                            ctx.getSource().sendSystemMessage(Component.literal("Current log level: " + logLevel));
+                            ctx.getSource().sendSystemMessage(detailLine("Current log level", String.valueOf(logLevel), ChatFormatting.GOLD));
                             return 1;
                         }))
                 .then(literal("normalkeys")
@@ -353,16 +356,16 @@ public final class LockService {
                                 .executes(ctx -> {
                             String value = StringArgumentType.getString(ctx, "value").toLowerCase(Locale.ROOT);
                             if (!value.equals("on") && !value.equals("off")) {
-                                ctx.getSource().sendSystemMessage(Component.literal("Usage: /chestlock normalkeys <on|off>"));
+                                ctx.getSource().sendSystemMessage(errorLine("Usage: /chestlock normalkeys <on|off>"));
                                 return 1;
                             }
                             allowNormalKeys = value.equals("on");
                             saveConfigValue("keys.allow-normal", allowNormalKeys);
-                            ctx.getSource().sendSystemMessage(Component.literal("Normal trial keys are now " + (allowNormalKeys ? "enabled." : "disabled.")));
+                            ctx.getSource().sendSystemMessage(successLine("Normal trial keys are now " + (allowNormalKeys ? "enabled." : "disabled.")));
                             return 1;
                         }))
                         .executes(ctx -> {
-                            ctx.getSource().sendSystemMessage(Component.literal("Normal trial keys are " + (allowNormalKeys ? "enabled." : "disabled.")));
+                            ctx.getSource().sendSystemMessage(detailLine("Normal trial keys", allowNormalKeys ? "enabled" : "disabled", allowNormalKeys ? ChatFormatting.GREEN : ChatFormatting.RED));
                             return 1;
                         }))
                 .then(literal("lockpicks")
@@ -371,16 +374,16 @@ public final class LockService {
                                 .executes(ctx -> {
                             String value = StringArgumentType.getString(ctx, "value").toLowerCase(Locale.ROOT);
                             if (!value.equals("on") && !value.equals("off")) {
-                                ctx.getSource().sendSystemMessage(Component.literal("Usage: /chestlock lockpicks <on|off>"));
+                                ctx.getSource().sendSystemMessage(errorLine("Usage: /chestlock lockpicks <on|off>"));
                                 return 1;
                             }
                             allowLockpicks = value.equals("on");
                             saveConfigValue("lockpicks.enabled", allowLockpicks);
-                            ctx.getSource().sendSystemMessage(Component.literal("Lockpicking is now " + (allowLockpicks ? "enabled." : "disabled.")));
+                            ctx.getSource().sendSystemMessage(successLine("Lockpicking is now " + (allowLockpicks ? "enabled." : "disabled.")));
                             return 1;
                         }))
                         .executes(ctx -> {
-                            ctx.getSource().sendSystemMessage(Component.literal("Lockpicking is " + (allowLockpicks ? "enabled." : "disabled.")));
+                            ctx.getSource().sendSystemMessage(detailLine("Lockpicking", allowLockpicks ? "enabled" : "disabled", allowLockpicks ? ChatFormatting.GREEN : ChatFormatting.RED));
                             return 1;
                         }))
                 .then(literal("lockoutscope")
@@ -389,16 +392,16 @@ public final class LockService {
                                 .executes(ctx -> {
                             String value = StringArgumentType.getString(ctx, "value");
                             if (!value.equalsIgnoreCase("chest") && !value.equalsIgnoreCase("player")) {
-                                ctx.getSource().sendSystemMessage(Component.literal("Usage: /chestlock lockoutscope <chest|player>"));
+                                ctx.getSource().sendSystemMessage(errorLine("Usage: /chestlock lockoutscope <chest|player>"));
                                 return 1;
                             }
                             lockoutScope = LockoutScope.fromConfig(value);
                             saveConfigValue("lockpicks.lockout-scope", lockoutScope.name().toLowerCase(Locale.ROOT));
-                            ctx.getSource().sendSystemMessage(Component.literal("Lockout scope set to " + lockoutScope.name().toLowerCase(Locale.ROOT) + "."));
+                            ctx.getSource().sendSystemMessage(successLine("Lockout scope set to " + lockoutScope.name().toLowerCase(Locale.ROOT) + "."));
                             return 1;
                         }))
                         .executes(ctx -> {
-                            ctx.getSource().sendSystemMessage(Component.literal("Lockout scope is " + lockoutScope.name().toLowerCase(Locale.ROOT) + "."));
+                            ctx.getSource().sendSystemMessage(detailLine("Lockout scope", lockoutScope.name().toLowerCase(Locale.ROOT), ChatFormatting.AQUA));
                             return 1;
                         }))
                 .then(literal("help").executes(ctx -> sendHelp(ctx.getSource())))
@@ -418,12 +421,12 @@ public final class LockService {
         try {
             target = EntityArgument.getPlayer(ctx, "player");
         } catch (com.mojang.brigadier.exceptions.CommandSyntaxException ex) {
-            ctx.getSource().sendSystemMessage(Component.literal("Player not found."));
+            ctx.getSource().sendSystemMessage(errorLine("Player not found."));
             return 1;
         }
         PickType pickType = parsePickType(StringArgumentType.getString(ctx, "type"));
         if (pickType == null) {
-            ctx.getSource().sendSystemMessage(Component.literal("Pick type must be rusty, normal, or silence."));
+            ctx.getSource().sendSystemMessage(errorLine("Pick type must be rusty, normal, or silence."));
             return 1;
         }
         ItemStack stack = createPick(pickType);
@@ -432,21 +435,49 @@ public final class LockService {
         if (!added) {
             target.drop(stack, false);
         }
-        ctx.getSource().sendSystemMessage(Component.literal("Gave " + amount + " " + pickType.id + " pick(s) to " + target.getName().getString() + "."));
+        ctx.getSource().sendSystemMessage(successLine("Gave " + amount + " " + pickType.id + " pick(s) to " + target.getName().getString() + "."));
         return 1;
     }
 
     private int sendHelp(CommandSourceStack source) {
-        source.sendSystemMessage(Component.literal("/chestlock info - show lock key name for looked-at container"));
-        source.sendSystemMessage(Component.literal("/chestlock unlock - force unlock looked-at container"));
-        source.sendSystemMessage(Component.literal("/chestlock keyinfo - show lock info for key in hand"));
-        source.sendSystemMessage(Component.literal("/chestlock reload - reload lock data from disk"));
-        source.sendSystemMessage(Component.literal("/chestlock loglevel <0-3> - set log verbosity"));
-        source.sendSystemMessage(Component.literal("/chestlock normalkeys <on|off> - allow normal trial keys"));
-        source.sendSystemMessage(Component.literal("/chestlock lockpicks <on|off> - allow lock picking"));
-        source.sendSystemMessage(Component.literal("/chestlock lockoutscope <chest|player> - set lockout scope"));
-        source.sendSystemMessage(Component.literal("/chestlock give <player> <rusty|normal|silence> [amount] - give lock picks"));
+        source.sendSystemMessage(statusLine("ChestLock commands"));
+        source.sendSystemMessage(helpLine("/chestlock info", "show lock key name for looked-at container"));
+        source.sendSystemMessage(helpLine("/chestlock unlock", "force unlock looked-at container"));
+        source.sendSystemMessage(helpLine("/chestlock keyinfo", "show lock info for key in hand"));
+        source.sendSystemMessage(helpLine("/chestlock reload", "reload lock data from disk"));
+        source.sendSystemMessage(helpLine("/chestlock loglevel <0-3>", "set log verbosity"));
+        source.sendSystemMessage(helpLine("/chestlock normalkeys <on|off>", "allow normal trial keys"));
+        source.sendSystemMessage(helpLine("/chestlock lockpicks <on|off>", "allow lock picking"));
+        source.sendSystemMessage(helpLine("/chestlock lockoutscope <chest|player>", "set lockout scope"));
+        source.sendSystemMessage(helpLine("/chestlock give <player> <rusty|normal|silence> [amount]", "give lock picks"));
         return 1;
+    }
+
+    private Component statusLine(String text) {
+        return Component.literal(">> ").withStyle(ChatFormatting.DARK_GREEN, ChatFormatting.BOLD)
+                .append(Component.literal(text).withStyle(ChatFormatting.GREEN));
+    }
+
+    private Component successLine(String text) {
+        return Component.literal(">> ").withStyle(ChatFormatting.DARK_GREEN, ChatFormatting.BOLD)
+                .append(Component.literal(text).withStyle(ChatFormatting.GREEN));
+    }
+
+    private Component errorLine(String text) {
+        return Component.literal(">> ").withStyle(ChatFormatting.DARK_RED, ChatFormatting.BOLD)
+                .append(Component.literal(text).withStyle(ChatFormatting.RED));
+    }
+
+    private Component detailLine(String label, String value, ChatFormatting valueColor) {
+        return Component.literal(label + ": ").withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(value).withStyle(valueColor));
+    }
+
+    private Component helpLine(String command, String description) {
+        return Component.literal("• ").withStyle(ChatFormatting.DARK_GREEN)
+                .append(Component.literal(command).withStyle(ChatFormatting.AQUA))
+                .append(Component.literal(" - ").withStyle(ChatFormatting.DARK_GRAY))
+                .append(Component.literal(description).withStyle(ChatFormatting.GREEN));
     }
     public boolean onOpenLockedContainer(ServerPlayer player, BlockEntity blockEntity) {
         if (blockEntity == null) {
@@ -650,7 +681,7 @@ public final class LockService {
     }
     private void handlePickAttempt(ServerPlayer player, Level world, BlockPos pos, LockInfo lockInfo, PickMatch pickMatch) {
         if (!allowLockpicks) {
-            player.sendSystemMessage(Component.literal("Lockpicking is disabled."), false);
+            player.sendSystemMessage(errorLine("Lockpicking is disabled."), false);
             return;
         }
         List<BlockPos> locations = resolveLockLocations(world, pos, world.getBlockState(pos));
@@ -821,7 +852,7 @@ public final class LockService {
     }
 
     private void consumeOneKey(ServerPlayer player, KeyMatch match) {
-        ItemStack stack = match.hand == InteractionHand.MAIN_HAND ? player.getMainHandItem() : player.getOffhandItem();
+        ItemStack stack = match.hand() == InteractionHand.MAIN_HAND ? player.getMainHandItem() : player.getOffhandItem();
         if (stack.isEmpty()) {
             return;
         }
@@ -829,7 +860,7 @@ public final class LockService {
     }
 
     private void consumeOnePick(ServerPlayer player, PickMatch match) {
-        ItemStack stack = match.hand == InteractionHand.MAIN_HAND ? player.getMainHandItem() : player.getOffhandItem();
+        ItemStack stack = match.hand() == InteractionHand.MAIN_HAND ? player.getMainHandItem() : player.getOffhandItem();
         if (stack.isEmpty()) {
             return;
         }
@@ -1701,294 +1732,5 @@ public final class LockService {
             return null;
         }
     }
-    private record LocationData(String worldName, BlockPos pos, String realm, String worldKey) {
-    }
-
-    private record PendingIgnite(String playerName, long timestamp) {
-    }
-
-    private record HopperOwner(String playerName, long timestamp) {
-    }
-
-    private record KeyMatch(String name, InteractionHand hand, boolean normal) {
-    }
-
-    private record PickMatch(PickType type, InteractionHand hand) {
-    }
-
-    private record PickState(int rustyLimit, int rustyAttempts,
-                             int normalLimit, int normalAttempts,
-                             int silenceLimit, int silenceAttempts,
-                             int silenceOverLimitAttempts, long silencePenaltyTimestamp) {
-        private static PickState empty() {
-            return new PickState(-1, 0, -1, 0, -1, 0, 0, 0L);
-        }
-
-        private PickState withRustyLimit(int limit) {
-            return new PickState(limit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp);
-        }
-
-        private PickState withRustyAttempts(int attempts) {
-            return new PickState(rustyLimit, attempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp);
-        }
-
-        private PickState withNormalLimit(int limit) {
-            return new PickState(rustyLimit, rustyAttempts, limit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp);
-        }
-
-        private PickState withNormalAttempts(int attempts) {
-            return new PickState(rustyLimit, rustyAttempts, normalLimit, attempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp);
-        }
-
-        private PickState withSilenceLimit(int limit) {
-            return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, limit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp);
-        }
-
-        private PickState withSilenceAttempts(int attempts) {
-            return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, attempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp);
-        }
-
-        private PickState withSilenceOverLimitAttempts(int attempts) {
-            return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    attempts, silencePenaltyTimestamp);
-        }
-
-        private PickState withSilencePenaltyTimestamp(long timestamp) {
-            return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, timestamp);
-        }
-    }
-
-    private enum LockoutScope {
-        CHEST,
-        PLAYER;
-
-        private static LockoutScope fromConfig(String value) {
-            if (value == null) {
-                return CHEST;
-            }
-            return switch (value.toLowerCase(Locale.ROOT)) {
-                case "player" -> PLAYER;
-                default -> CHEST;
-            };
-        }
-    }
-
-    private enum PickType {
-        RUSTY("rusty", "Rusty Lock Pick", RUSTY_MODEL_DATA, 1.0),
-        NORMAL("normal", "Lock Pick", NORMAL_MODEL_DATA, 0.5),
-        SILENCE("silence", "Silence Lock Pick", SILENCE_MODEL_DATA, 0.05);
-
-        private final String id;
-        private final String displayName;
-        private final int modelData;
-        private final double breakChance;
-
-        PickType(String id, String displayName, int modelData, double breakChance) {
-            this.id = id;
-            this.displayName = displayName;
-            this.modelData = modelData;
-            this.breakChance = breakChance;
-        }
-
-        private static PickType fromId(String id) {
-            for (PickType type : values()) {
-                if (type.id.equalsIgnoreCase(id)) {
-                    return type;
-                }
-            }
-            return null;
-        }
-    }
-
-    private static final class LockInfo {
-        private final String keyName;
-        private final String creatorName;
-        private final UUID creatorUuid;
-        private final String lastUserName;
-        private final UUID lastUserUuid;
-        private final boolean normalKey;
-        private final boolean normalArmed;
-        private final String lastPickUserName;
-        private final UUID lastPickUserUuid;
-        private final String lastPickType;
-        private final long lastPickTimestamp;
-        private final int rustyLimit;
-        private final int rustyAttempts;
-        private final int normalLimit;
-        private final int normalAttempts;
-        private final int silenceLimit;
-        private final int silenceAttempts;
-        private final int silenceOverLimitAttempts;
-        private final long silencePenaltyTimestamp;
-        private final Map<UUID, PickState> playerPickStates;
-
-        private LockInfo(String keyName, String creatorName, UUID creatorUuid, String lastUserName, UUID lastUserUuid,
-                         boolean normalKey, boolean normalArmed,
-                         String lastPickUserName, UUID lastPickUserUuid, String lastPickType, long lastPickTimestamp,
-                         int rustyLimit, int rustyAttempts,
-                         int normalLimit, int normalAttempts,
-                         int silenceLimit, int silenceAttempts,
-                         int silenceOverLimitAttempts, long silencePenaltyTimestamp,
-                         Map<UUID, PickState> playerPickStates) {
-            this.keyName = keyName;
-            this.creatorName = creatorName;
-            this.creatorUuid = creatorUuid;
-            this.lastUserName = lastUserName;
-            this.lastUserUuid = lastUserUuid;
-            this.normalKey = normalKey;
-            this.normalArmed = normalArmed;
-            this.lastPickUserName = lastPickUserName;
-            this.lastPickUserUuid = lastPickUserUuid;
-            this.lastPickType = lastPickType;
-            this.lastPickTimestamp = lastPickTimestamp;
-            this.rustyLimit = rustyLimit;
-            this.rustyAttempts = rustyAttempts;
-            this.normalLimit = normalLimit;
-            this.normalAttempts = normalAttempts;
-            this.silenceLimit = silenceLimit;
-            this.silenceAttempts = silenceAttempts;
-            this.silenceOverLimitAttempts = silenceOverLimitAttempts;
-            this.silencePenaltyTimestamp = silencePenaltyTimestamp;
-            this.playerPickStates = playerPickStates == null ? new HashMap<>() : new HashMap<>(playerPickStates);
-        }
-
-        private String keyName() {
-            return keyName;
-        }
-
-        private String creatorName() {
-            return creatorName;
-        }
-
-        private UUID creatorUuid() {
-            return creatorUuid;
-        }
-
-        private String lastUserName() {
-            return lastUserName;
-        }
-
-        private UUID lastUserUuid() {
-            return lastUserUuid;
-        }
-
-        private boolean normalKey() {
-            return normalKey;
-        }
-
-        private boolean normalArmed() {
-            return normalArmed;
-        }
-
-        private String lastPickUserName() {
-            return lastPickUserName;
-        }
-
-        private UUID lastPickUserUuid() {
-            return lastPickUserUuid;
-        }
-
-        private String lastPickType() {
-            return lastPickType;
-        }
-
-        private long lastPickTimestamp() {
-            return lastPickTimestamp;
-        }
-
-        private int rustyLimit() {
-            return rustyLimit;
-        }
-
-        private int rustyAttempts() {
-            return rustyAttempts;
-        }
-
-        private int normalLimit() {
-            return normalLimit;
-        }
-
-        private int normalAttempts() {
-            return normalAttempts;
-        }
-
-        private int silenceLimit() {
-            return silenceLimit;
-        }
-
-        private int silenceAttempts() {
-            return silenceAttempts;
-        }
-
-        private int silenceOverLimitAttempts() {
-            return silenceOverLimitAttempts;
-        }
-
-        private long silencePenaltyTimestamp() {
-            return silencePenaltyTimestamp;
-        }
-
-        private Map<UUID, PickState> playerPickStates() {
-            return playerPickStates;
-        }
-
-        private PickState toPickState() {
-            return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp);
-        }
-
-        private LockInfo withLastUser(ServerPlayer player) {
-            return new LockInfo(keyName, creatorName, creatorUuid, player.getName().getString(), player.getUUID(), normalKey, normalArmed,
-                    lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
-                    rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates);
-        }
-
-        private LockInfo withNormalArmed(boolean armed) {
-            return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, armed,
-                    lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
-                    rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates);
-        }
-
-        private LockInfo withPickState(PickState state) {
-            if (state == null) {
-                return this;
-            }
-            return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed,
-                    lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
-                    state.rustyLimit(), state.rustyAttempts(), state.normalLimit(), state.normalAttempts(),
-                    state.silenceLimit(), state.silenceAttempts(), state.silenceOverLimitAttempts(),
-                    state.silencePenaltyTimestamp(), playerPickStates);
-        }
-
-        private LockInfo withLastPick(ServerPlayer player, PickType pickType, long timestamp) {
-            if (player == null || pickType == null) {
-                return this;
-            }
-            return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed,
-                    player.getName().getString(), player.getUUID(), pickType.id, timestamp,
-                    rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates);
-        }
-
-        private LockInfo withPlayerPickState(UUID playerId, PickState state) {
-            if (playerId == null || state == null) {
-                return this;
-            }
-            Map<UUID, PickState> updatedStates = new HashMap<>(playerPickStates);
-            updatedStates.put(playerId, state);
-            return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed,
-                    lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
-                    rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp, updatedStates);
-        }
-    }
 }
+

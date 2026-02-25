@@ -11,7 +11,7 @@
   "environment": "*",
   "entrypoints": {
     "main": [
-      "com.example.chestlock.fabric.ChestLockFabric"
+      "com.ominouschestlock.fabric.ChestLockFabric"
     ]
   },
   "mixins": [
@@ -23,3 +23,5 @@
     "fabric-api": ">=${fabricApiVersion}"
   }
 }
+
+

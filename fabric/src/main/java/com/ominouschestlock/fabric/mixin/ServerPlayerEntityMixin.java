@@ -1,6 +1,6 @@
-package com.example.chestlock.fabric.mixin;
+package com.ominouschestlock.fabric.mixin;
 
-import com.example.chestlock.fabric.ChestLockFabric;
+import com.ominouschestlock.fabric.ChestLockFabric;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.server.level.ServerPlayer;
@@ -31,3 +31,5 @@ public abstract class ServerPlayerEntityMixin {
         ChestLockFabric.getService().onCloseLockedContainer(player);
     }
 }
+
+

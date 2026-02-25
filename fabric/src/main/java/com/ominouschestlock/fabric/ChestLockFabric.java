@@ -1,4 +1,4 @@
-package com.example.chestlock.fabric;
+package com.ominouschestlock.fabric;
 
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -22,3 +22,5 @@ public final class ChestLockFabric implements ModInitializer {
         CommandRegistrationCallback.EVENT.register(SERVICE::registerCommands);
     }
 }
+
+

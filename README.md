@@ -167,3 +167,4 @@ Fabric jar: `fabric/build/libs/OminousChestLock-1.x.0_Fabric.jar`
 
 ## Permissions
 - `chestlock.admin` - Allows use of admin commands (default: op).
+
