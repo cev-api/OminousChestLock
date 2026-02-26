@@ -2,7 +2,7 @@
 
 ![Screenshot](https://i.imgur.com/lheQ9q9.png)
 
-Paper plugin (1.21.0–1.21.11+) and Fabric server mod (1.21.11) that locks chests, double chests, barrels, and shulker boxes to a named Ominous or regular Trial Key, with optional lockpicking.
+Paper plugin (1.21.0–1.21.11+) and Fabric server mod (1.21.11) that locks chests, double chests, barrels, and shulker boxes to a named Ominous or regular Trial Key, with an optional lockpicking minigame.
 
 ## How it works
 - Rename an ominous trial key in an anvil (example: `secretkeyname`).
@@ -20,8 +20,8 @@ Vault sounds are used for success/failure feedback.
 
 Three lock picks can be crafted and used to pick locked containers when you do not have the correct key. Attempts and lockouts are tracked per pick type, using the configured lockout scope.
 
-- Rusty pick: `copper ingot + tripwire hook + stick` (default 100% break chance).
-- Normal pick: `iron ingot + tripwire hook + breeze rod` (default 50% break chance).
+- Rusty pick: `copper ingot + tripwire hook + stick` (default 88% break chance).
+- Normal pick: `iron ingot + tripwire hook + breeze rod` (default 33% break chance).
 - Silence pick: `normal pick + silence trim + echo shard` in a smithing table (default 5% break chance).
 
 Lockout limit is a random roll between `lockpicks.limit.min` and `lockpicks.limit.max` (inclusive). The roll happens on the first pick attempt for that pick type and is stored on the lock until it is unlocked/destroyed.
@@ -34,34 +34,36 @@ The attempt limit roll, lockout tracking, and fail-damage rules apply in both lo
 
 ### Lockpick modes
 - `lockpicks.minigame.enabled: false` -> legacy RNG mode (uses `open-chance` and `normal-key-chance`).
-- `lockpicks.minigame.enabled: true` -> pin minigame mode.
+- `lockpicks.minigame.enabled: true` -> pin minigame mode (default mode).
 
 ### Minigame mode
 - Opens a custom inventory UI (pins as columns, depths as rows).
+- Depth range is capped at 5 (`1..5`) for generated lock secrets and config values.
 - Left click: select depth for a pin. Right click: eliminate candidate.
-- `TURN LOCK` consumes one attempt and evaluates selected pins.
+- `TURN LOCK` consumes one full attempt each press (attempt/break/damage rules apply on failed turns).
 - Success requires all selected depths to match the secret pinout.
+- Turn-distance meter is rendered on the bottom row of the minigame inventory (full width).
 - Bossbar feedback:
   - Normal fail: yellow turn distance, then red `Chest Locked!`, then reset.
   - Hard lockout fail: red `Locked Out` (no turn-distance animation).
   - Success: fills to full, flashes green `Chest Unlocked!`, then unlocks and opens the container.
 - Optional visual feedback alternative (inside GUI):
-  - Side columns rise with turn distance, then flash red/green on fail/success.
+  - Bottom row meter (full width) fills with turn distance, then flashes red/green on fail/success.
   - Inventory title behavior:
     - Idle title: `Locked Chest`
     - During feedback events: title changes to status text (`Turn Distance`, `Chest Locked!`, `Locked Out`, `Chest Unlocked!`) with matching color
     - Returns to `Locked Chest` after the event
 - `lockpicks.minigame.bossbar.enabled` toggles bossbar on/off.
-- `lockpicks.minigame.visual-feedback.enabled` toggles side-column feedback on/off.
+- `lockpicks.minigame.visual-feedback.enabled` toggles inventory meter feedback on/off.
 - Session ownership: only one active picker per container.
 - Session timeout: controlled by `lockpicks.minigame.session-timeout-seconds`.
 - Pin regeneration on lockout/over-limit turn is configurable per lock type:
   - Trial default: stable pinout (`regenerate-on-attempt: false`)
   - Ominous default: reroll on lockout/over-limit (`regenerate-on-attempt: true`)
 
-![Unlock](https://i.imgur.com/XqbXqyE.png)
-![Almost](https://i.imgur.com/bjYTngr.png)
-![Fail](https://i.imgur.com/QrSLi7u.png)
+![Unlock](https://i.imgur.com/c86Anda.png)
+![Almost](https://i.imgur.com/NpRPTgA.png)
+![Fail](https://i.imgur.com/ffeTuho.png)
 
 
 ### Resource pack
@@ -105,8 +107,8 @@ locked-chests:
     minigame:
       type: ominous
       pins: 6
-      depths: 6
-      secret: [1, 4, 2, 5, 0, 3]
+      depths: 5
+      secret: [1, 4, 2, 5, 1, 3]
       created: 1767877437911
       salt-version: 1
 ```
@@ -123,7 +125,8 @@ Requires `chestlock.admin` (default: op).
 - `/chestlock lockpicks <on|off>` - Allow lock picking and crafting.
 - `/chestlock minigame <on|off>` - Toggle lockpick minigame mode.
 - `/chestlock minigamebossbar <on|off>` - Toggle bossbar feedback for minigame.
-- `/chestlock minigamevisual <on|off>` - Toggle side-column visual feedback for minigame.
+- `/chestlock minigamevisual <on|off>` - Toggle inventory meter visual feedback for minigame.
+- `/chestlock pinicon <material>` - Set selected pin icon material (example: `end_rod`).
 - `/chestlock lockoutscope <chest|player>` - Set lockout scope.
 - `/chestlock settings` - Show current loaded settings with color formatting.
 - `/chestlock give <player> <rusty|normal|silence> [amount]` - Give lock picks to a player.
@@ -164,8 +167,9 @@ Config in `plugins/OminousChestLock/config.yml`:
   - `session-timeout-seconds` = auto-timeout for active sessions
   - `bossbar.enabled` = enable/disable bossbar feedback
   - `bossbar.animate-ticks` / `bossbar.peak-hold-ticks` / `bossbar.snapback-delay-ticks` = turn bar timing
-  - `visual-feedback.enabled` = enable/disable side-column turn feedback
+  - `visual-feedback.enabled` = enable/disable inventory meter feedback
   - `visual-feedback.rename-inventory-title` = show status text in inventory title
+  - `ui.pin-icon` = material used for selected pin cells in the minigame grid
   - `sounds.click-per-correct-pin` = click sequence feedback mode
   - `security.require-holding-pick` = must keep matching pick in hand
   - `salt` + `salt-version` = seed inputs for first-time secret generation
@@ -190,12 +194,12 @@ lockpicks:
   rusty:
     open-chance: 0.05
     normal-key-chance: 0.1
-    break-chance: 1.0
+    break-chance: 0.88
     damage: 1.0
   normal:
     open-chance: 0.1
     normal-key-chance: 0.2
-    break-chance: 0.5
+    break-chance: 0.33
     damage: 2.0
   silence:
     open-chance: 0.5
@@ -212,7 +216,7 @@ lockpicks:
       regenerate-on-attempt: false
     ominous:
       pins: 6
-      depths: 6
+      depths: 5
       regenerate-on-attempt: true
     session-timeout-seconds: 90
     bossbar:
@@ -223,6 +227,8 @@ lockpicks:
     visual-feedback:
       enabled: true
       rename-inventory-title: true
+    ui:
+      pin-icon: end_rod
     sounds:
       click-per-correct-pin: true
     security:

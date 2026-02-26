@@ -16,12 +16,12 @@ lockpicks:
   rusty:
     open-chance: 0.05
     normal-key-chance: 0.10
-    break-chance: 1.0
+    break-chance: 0.88
     damage: 1.0
   normal:
     open-chance: 0.10
     normal-key-chance: 0.20
-    break-chance: 0.50
+    break-chance: 0.33
     damage: 2.0
   silence:
     open-chance: 0.50
@@ -38,7 +38,7 @@ lockpicks:
       regenerate-on-attempt: false
     ominous:
       pins: 6
-      depths: 6
+      depths: 5
       regenerate-on-attempt: true
     session-timeout-seconds: 90
     bossbar:
@@ -49,6 +49,8 @@ lockpicks:
     visual-feedback:
       enabled: true
       rename-inventory-title: true
+    ui:
+      pin-icon: end_rod
     sounds:
       click-per-correct-pin: true
     security:

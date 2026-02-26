@@ -103,11 +103,11 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private int pickLimitMax = 20;
     private double rustyOpenChance = 0.05;
     private double rustyNormalKeyChance = 0.10;
-    private double rustyBreakChance = 1.0;
+    private double rustyBreakChance = 0.88;
     private double rustyDamage = 1.0;
     private double normalOpenChance = 0.10;
     private double normalNormalKeyChance = 0.20;
-    private double normalBreakChance = 0.50;
+    private double normalBreakChance = 0.33;
     private double normalDamage = 2.0;
     private double silenceOpenChance = 0.50;
     private double silenceBreakChance = 0.05;
@@ -118,7 +118,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private int trialPins = 4;
     private int trialDepths = 4;
     private int ominousPins = 6;
-    private int ominousDepths = 6;
+    private int ominousDepths = 5;
     private int minigameSessionTimeoutSeconds = 90;
     private int minigameBossbarAnimateTicks = 12;
     private int minigameBossbarSnapbackDelayTicks = 20;
@@ -128,6 +128,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private boolean minigameVisualFeedbackRenameTitle = true;
     private boolean minigameClickPerCorrectPin = true;
     private boolean minigameRequireHoldingPick = true;
+    private Material minigamePinIcon = Material.END_ROD;
     private String minigameSalt = "change-me";
     private int minigameSaltVersion = 1;
     private boolean trialAssistEliminateOne = true;
@@ -141,7 +142,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private static final int MINIGAME_SIZE = 54;
     private static final int GRID_FIRST_COLUMN = 1;
     private static final int GRID_MAX_COLUMNS = 6;
-    private static final int GRID_MAX_ROWS = 6;
+    private static final int GRID_MAX_ROWS = 5;
     private static final int SLOT_RESET_ALL = 17;
     private static final int SLOT_TURN_LOCK = 26;
     private static final int SLOT_CLOSE = 35;
@@ -210,10 +211,13 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 }
                 String creator = lockInfo.creatorName() == null ? "unknown" : lockInfo.creatorName();
                 String lastUser = lockInfo.lastUserName() == null ? "unknown" : lockInfo.lastUserName();
-                player.sendMessage(statusLine("Lock details"));
-                player.sendMessage(detailLine("Key", lockInfo.keyName(), NamedTextColor.AQUA));
-                player.sendMessage(detailLine("Created by", creator, NamedTextColor.GREEN));
-                player.sendMessage(detailLine("Last used by", lastUser, NamedTextColor.GREEN));
+                Component info = statusLine("Lock details")
+                        .append(Component.newline())
+                        .append(detailLine("Key", lockInfo.keyName(), NamedTextColor.AQUA))
+                        .append(Component.newline())
+                        .append(detailLine("Created by", creator, NamedTextColor.GREEN))
+                        .append(Component.newline())
+                        .append(detailLine("Last used by", lastUser, NamedTextColor.GREEN));
                 LockMinigameData minigameData = lockInfo.minigameData();
                 if (minigameData != null) {
                     int[] secret = minigameData.secret();
@@ -224,20 +228,27 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                         }
                         combo.append(secret[i] + 1);
                     }
-                    player.sendMessage(detailLine("Minigame type", minigameData.type(), NamedTextColor.GOLD));
-                    player.sendMessage(detailLine("Pin combo", combo.toString(), NamedTextColor.YELLOW));
+                    info = info.append(Component.newline())
+                            .append(detailLine("Minigame type", minigameData.type(), NamedTextColor.GOLD))
+                            .append(Component.newline())
+                            .append(detailLine("Pin combo", combo.toString(), NamedTextColor.YELLOW));
                 }
                 PickState state = getPickState(lockInfo, player);
-                player.sendMessage(detailLine("Rusty pick", formatPickStatus(state.rustyAttempts(), state.rustyLimit()), NamedTextColor.GOLD));
-                player.sendMessage(detailLine("Normal pick", formatPickStatus(state.normalAttempts(), state.normalLimit()), NamedTextColor.YELLOW));
-                player.sendMessage(detailLine("Silence pick", formatSilenceStatus(state), NamedTextColor.LIGHT_PURPLE));
+                info = info.append(Component.newline())
+                        .append(detailLine("Rusty pick", formatPickStatus(state.rustyAttempts(), state.rustyLimit()), NamedTextColor.GOLD))
+                        .append(Component.newline())
+                        .append(detailLine("Normal pick", formatPickStatus(state.normalAttempts(), state.normalLimit()), NamedTextColor.YELLOW))
+                        .append(Component.newline())
+                        .append(detailLine("Silence pick", formatSilenceStatus(state), NamedTextColor.LIGHT_PURPLE));
                 if (lockInfo.lastPickUserName() != null && lockInfo.lastPickType() != null) {
                     String when = lockInfo.lastPickTimestamp() > 0L
                             ? formatDuration(System.currentTimeMillis() - lockInfo.lastPickTimestamp()) + " ago"
                             : "unknown time";
-                    player.sendMessage(detailLine("Last pick attempt", lockInfo.lastPickUserName()
-                            + " with " + lockInfo.lastPickType() + " (" + when + ")", NamedTextColor.LIGHT_PURPLE));
+                    info = info.append(Component.newline())
+                            .append(detailLine("Last pick attempt", lockInfo.lastPickUserName()
+                                    + " with " + lockInfo.lastPickType() + " (" + when + ")", NamedTextColor.LIGHT_PURPLE));
                 }
+                player.sendMessage(info);
                 return true;
             }
             case "unlock" -> {
@@ -534,7 +545,28 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                         minigameVisualFeedbackEnabled ? NamedTextColor.GREEN : NamedTextColor.RED));
                 sender.sendMessage(detailLine("Title status", minigameVisualFeedbackRenameTitle ? "enabled" : "disabled",
                         minigameVisualFeedbackRenameTitle ? NamedTextColor.GREEN : NamedTextColor.RED));
+                sender.sendMessage(detailLine("Pin icon", minigamePinIcon.name().toLowerCase(), NamedTextColor.AQUA));
                 sender.sendMessage(detailLine("Salt version", String.valueOf(minigameSaltVersion), NamedTextColor.GRAY));
+                return true;
+            }
+            case "pinicon" -> {
+                if (args.length < 2) {
+                    sender.sendMessage(detailLine("Minigame pin icon", minigamePinIcon.name().toLowerCase(), NamedTextColor.AQUA));
+                    sender.sendMessage(errorLine("Usage: /chestlock pinicon <material>"));
+                    return true;
+                }
+                Material material = Material.matchMaterial(args[1]);
+                if (material == null || material.isAir()) {
+                    sender.sendMessage(errorLine("Unknown or invalid material. Example: end_rod"));
+                    return true;
+                }
+                minigamePinIcon = material;
+                getConfig().set("lockpicks.minigame.ui.pin-icon", material.name().toLowerCase());
+                saveConfig();
+                for (MinigameSession session : new ArrayList<>(minigameSessionsByPlayer.values())) {
+                    renderMinigame(session);
+                }
+                sender.sendMessage(successLine("Minigame pin icon set to " + material.name().toLowerCase() + "."));
                 return true;
             }
             default -> {
@@ -551,7 +583,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         }
         if (args.length == 1) {
             return List.of("info", "unlock", "keyinfo", "reload", "loglevel", "normalkeys", "lockpicks", "minigame",
-                    "minigamebossbar", "minigamevisual", "lockoutscope", "settings", "give", "help");
+                    "minigamebossbar", "minigamevisual", "pinicon", "lockoutscope", "settings", "give", "help");
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("loglevel")) {
             return List.of("0", "1", "2", "3");
@@ -573,6 +605,23 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("lockoutscope")) {
             return List.of("chest", "player");
+        }
+        if (args.length == 2 && args[0].equalsIgnoreCase("pinicon")) {
+            String q = args[1].toLowerCase();
+            List<String> out = new ArrayList<>();
+            for (Material material : Material.values()) {
+                if (material.isAir()) {
+                    continue;
+                }
+                String id = material.name().toLowerCase();
+                if (id.startsWith(q)) {
+                    out.add(id);
+                    if (out.size() >= 40) {
+                        break;
+                    }
+                }
+            }
+            return out;
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("give")) {
             List<String> names = new ArrayList<>();
@@ -598,7 +647,8 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         sender.sendMessage(helpLine("/chestlock lockpicks <on|off>", "allow lock picking and crafting"));
         sender.sendMessage(helpLine("/chestlock minigame <on|off>", "toggle lockpick minigame mode"));
         sender.sendMessage(helpLine("/chestlock minigamebossbar <on|off>", "toggle minigame bossbar feedback"));
-        sender.sendMessage(helpLine("/chestlock minigamevisual <on|off>", "toggle minigame side-column feedback"));
+        sender.sendMessage(helpLine("/chestlock minigamevisual <on|off>", "toggle minigame inventory meter feedback"));
+        sender.sendMessage(helpLine("/chestlock pinicon <material>", "set selected pin icon item"));
         sender.sendMessage(helpLine("/chestlock lockoutscope <chest|player>", "set lockout scope"));
         sender.sendMessage(helpLine("/chestlock settings", "show current loaded settings"));
         sender.sendMessage(helpLine("/chestlock give <player> <rusty|normal|silence> [amount]", "give lock picks"));
@@ -1122,14 +1172,14 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             inv.setItem(slot, filler);
         }
 
-        renderMinigameSideFeedback(inv, session);
+        renderBottomTurnMeter(inv, session);
 
         for (int pin = 0; pin < session.minigameData.pins() && pin < GRID_MAX_COLUMNS; pin++) {
             for (int depth = 0; depth < session.minigameData.depths() && depth < GRID_MAX_ROWS; depth++) {
                 int slot = depth * 9 + pin + GRID_FIRST_COLUMN;
                 boolean eliminated = session.eliminated[pin][depth];
                 boolean selected = session.selectedDepths[pin] == depth;
-                Material material = selected ? Material.LIME_DYE : (eliminated ? Material.RED_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE);
+                Material material = selected ? minigamePinIcon : (eliminated ? Material.RED_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE);
                 NamedTextColor color = selected ? NamedTextColor.GREEN : (eliminated ? NamedTextColor.RED : NamedTextColor.GRAY);
                 String state = selected ? "Selected" : (eliminated ? "Eliminated" : "Candidate");
                 inv.setItem(slot, namedItem(material, "Depth " + (depth + 1), color,
@@ -1162,6 +1212,45 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         updateMinigameTitle(session);
     }
 
+    private void renderBottomTurnMeter(Inventory inv, MinigameSession session) {
+        double progress = Math.max(0.0, Math.min(1.0, session.feedbackProgress));
+        int meterStart = 45;
+        int meterSlots = 9;
+        int filled = (int) Math.ceil(progress * meterSlots);
+        if (progress <= 0.0) {
+            filled = 0;
+        }
+        Material litMaterial;
+        NamedTextColor litColor;
+        switch (session.feedbackColor) {
+            case RED -> {
+                litMaterial = Material.RED_STAINED_GLASS_PANE;
+                litColor = NamedTextColor.RED;
+            }
+            case GREEN -> {
+                litMaterial = Material.LIME_STAINED_GLASS_PANE;
+                litColor = NamedTextColor.GREEN;
+            }
+            case YELLOW -> {
+                litMaterial = Material.YELLOW_STAINED_GLASS_PANE;
+                litColor = NamedTextColor.YELLOW;
+            }
+            default -> {
+                litMaterial = Material.BLACK_STAINED_GLASS_PANE;
+                litColor = NamedTextColor.DARK_GRAY;
+            }
+        }
+        for (int i = 0; i < meterSlots; i++) {
+            int slot = meterStart + i;
+            boolean lit = i < filled;
+            if (lit) {
+                inv.setItem(slot, namedItem(litMaterial, " ", litColor, List.of()));
+            } else {
+                inv.setItem(slot, namedItem(Material.BLACK_STAINED_GLASS_PANE, " ", NamedTextColor.DARK_GRAY, List.of()));
+            }
+        }
+    }
+
     private String activeFeedbackStatus(MinigameSession session) {
         if (session == null || session.feedbackColor == MinigameSession.FeedbackColor.OFF) {
             return null;
@@ -1170,57 +1259,6 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             return null;
         }
         return session.feedbackTitle;
-    }
-
-    private void renderMinigameSideFeedback(Inventory inv, MinigameSession session) {
-        if (!minigameVisualFeedbackEnabled) {
-            return;
-        }
-        double progress = Math.max(0.0, Math.min(1.0, session.feedbackProgress));
-        int rows = GRID_MAX_ROWS;
-        int filledRows = (int) Math.ceil(progress * rows);
-        if (progress <= 0.0) {
-            filledRows = 0;
-        }
-
-        Material activeMaterial;
-        NamedTextColor activeColor;
-        String stateLabel;
-        switch (session.feedbackColor) {
-            case RED -> {
-                activeMaterial = Material.RED_STAINED_GLASS_PANE;
-                activeColor = NamedTextColor.RED;
-                stateLabel = "Locked";
-            }
-            case GREEN -> {
-                activeMaterial = Material.LIME_STAINED_GLASS_PANE;
-                activeColor = NamedTextColor.GREEN;
-                stateLabel = "Unlocked";
-            }
-            case YELLOW -> {
-                activeMaterial = Material.YELLOW_STAINED_GLASS_PANE;
-                activeColor = NamedTextColor.YELLOW;
-                stateLabel = "Turning";
-            }
-            default -> {
-                activeMaterial = Material.BLACK_STAINED_GLASS_PANE;
-                activeColor = NamedTextColor.DARK_GRAY;
-                stateLabel = "Idle";
-            }
-        }
-
-        for (int row = 0; row < GRID_MAX_ROWS; row++) {
-            int leftSlot = row * 9;
-            int rightSlot = row * 9 + 7;
-            boolean lit = row >= (GRID_MAX_ROWS - filledRows);
-            if (lit) {
-                inv.setItem(leftSlot, namedItem(activeMaterial, " ", activeColor, List.of(Component.text(stateLabel, activeColor))));
-                inv.setItem(rightSlot, namedItem(activeMaterial, " ", activeColor, List.of(Component.text(stateLabel, activeColor))));
-            } else {
-                inv.setItem(leftSlot, namedItem(Material.BLACK_STAINED_GLASS_PANE, " ", NamedTextColor.DARK_GRAY, List.of()));
-                inv.setItem(rightSlot, namedItem(Material.BLACK_STAINED_GLASS_PANE, " ", NamedTextColor.DARK_GRAY, List.of()));
-            }
-        }
     }
 
     private void updateMinigameTitle(MinigameSession session) {
@@ -1355,7 +1393,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                                             session.bossBar.setColor(BarColor.YELLOW);
                                             session.bossBar.setProgress(0.0);
                                         }
-                                        session.feedbackTitle = "Turn Distance";
+                                        session.feedbackTitle = "";
                                         session.feedbackColor = MinigameSession.FeedbackColor.OFF;
                                         session.feedbackProgress = 0.0;
                                         renderMinigame(session);
@@ -1367,6 +1405,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         }, 1L, 1L);
         session.bossbarTaskId = task.getTaskId();
     }
+
 
     private void showLockedOutBossbar(Player player, MinigameSession session, TurnAttemptResult result, boolean pickBroken) {
         BossBar bossBar = session.bossBar;
@@ -1426,7 +1465,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                     session.bossBar.setColor(BarColor.YELLOW);
                     session.bossBar.setProgress(0.0);
                 }
-                session.feedbackTitle = "Turn Distance";
+                session.feedbackTitle = "";
                 session.feedbackColor = MinigameSession.FeedbackColor.OFF;
                 session.feedbackProgress = 0.0;
                 renderMinigame(session);
@@ -2694,11 +2733,11 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         pickLimitMax = Math.max(pickLimitMin, getConfig().getInt("lockpicks.limit.max", 20));
         rustyOpenChance = clampChance(getConfig().getDouble("lockpicks.rusty.open-chance", 0.05));
         rustyNormalKeyChance = clampChance(getConfig().getDouble("lockpicks.rusty.normal-key-chance", 0.10));
-        rustyBreakChance = clampChance(getConfig().getDouble("lockpicks.rusty.break-chance", 1.0));
+        rustyBreakChance = clampChance(getConfig().getDouble("lockpicks.rusty.break-chance", 0.88));
         rustyDamage = Math.max(0.0, getConfig().getDouble("lockpicks.rusty.damage", 1.0));
         normalOpenChance = clampChance(getConfig().getDouble("lockpicks.normal.open-chance", 0.10));
         normalNormalKeyChance = clampChance(getConfig().getDouble("lockpicks.normal.normal-key-chance", 0.20));
-        normalBreakChance = clampChance(getConfig().getDouble("lockpicks.normal.break-chance", 0.50));
+        normalBreakChance = clampChance(getConfig().getDouble("lockpicks.normal.break-chance", 0.33));
         normalDamage = Math.max(0.0, getConfig().getDouble("lockpicks.normal.damage", 2.0));
         silenceOpenChance = clampChance(getConfig().getDouble("lockpicks.silence.open-chance", 0.50));
         silenceBreakChance = clampChance(getConfig().getDouble("lockpicks.silence.break-chance", 0.05));
@@ -2710,7 +2749,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         trialPins = Math.max(1, Math.min(GRID_MAX_COLUMNS, getConfig().getInt("lockpicks.minigame.trial.pins", 4)));
         trialDepths = Math.max(1, Math.min(GRID_MAX_ROWS, getConfig().getInt("lockpicks.minigame.trial.depths", 4)));
         ominousPins = Math.max(1, Math.min(GRID_MAX_COLUMNS, getConfig().getInt("lockpicks.minigame.ominous.pins", 6)));
-        ominousDepths = Math.max(1, Math.min(GRID_MAX_ROWS, getConfig().getInt("lockpicks.minigame.ominous.depths", 6)));
+        ominousDepths = Math.max(1, Math.min(GRID_MAX_ROWS, getConfig().getInt("lockpicks.minigame.ominous.depths", 5)));
         minigameSessionTimeoutSeconds = Math.max(30, getConfig().getInt("lockpicks.minigame.session-timeout-seconds", 90));
         minigameBossbarEnabled = getConfig().getBoolean("lockpicks.minigame.bossbar.enabled", true);
         minigameBossbarAnimateTicks = Math.max(1, getConfig().getInt("lockpicks.minigame.bossbar.animate-ticks", 12));
@@ -2718,6 +2757,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         minigameBossbarPeakHoldTicks = Math.max(0, getConfig().getInt("lockpicks.minigame.bossbar.peak-hold-ticks", 20));
         minigameVisualFeedbackEnabled = getConfig().getBoolean("lockpicks.minigame.visual-feedback.enabled", true);
         minigameVisualFeedbackRenameTitle = getConfig().getBoolean("lockpicks.minigame.visual-feedback.rename-inventory-title", true);
+        minigamePinIcon = parseItemMaterial(getConfig().getString("lockpicks.minigame.ui.pin-icon"), Material.END_ROD);
         minigameClickPerCorrectPin = getConfig().getBoolean("lockpicks.minigame.sounds.click-per-correct-pin", true);
         minigameRequireHoldingPick = getConfig().getBoolean("lockpicks.minigame.security.require-holding-pick", true);
         minigameSalt = getConfig().getString("lockpicks.minigame.salt", "change-me");
@@ -2738,6 +2778,17 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             return 1.0;
         }
         return value;
+    }
+
+    private Material parseItemMaterial(String value, Material fallback) {
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        Material material = Material.matchMaterial(value);
+        if (material == null || material.isAir()) {
+            return fallback;
+        }
+        return material;
     }
 
     private String formatLocation(Location location) {
@@ -2994,14 +3045,25 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                         int pins = minigameSection.getInt("pins", 0);
                         int depths = minigameSection.getInt("depths", 0);
                         List<Integer> secretList = minigameSection.getIntegerList("secret");
-                        int[] secret = new int[secretList.size()];
-                        for (int i = 0; i < secretList.size(); i++) {
-                            secret[i] = secretList.get(i);
+                        int safePins = Math.max(1, Math.min(GRID_MAX_COLUMNS, pins));
+                        int safeDepths = Math.max(1, Math.min(GRID_MAX_ROWS, depths));
+                        int[] secret = new int[Math.min(secretList.size(), safePins)];
+                        boolean oneBased = true;
+                        for (Integer value : secretList) {
+                            if (value == null || value <= 0) {
+                                oneBased = false;
+                                break;
+                            }
+                        }
+                        for (int i = 0; i < secret.length; i++) {
+                            int raw = secretList.get(i);
+                            int normalized = oneBased ? (raw - 1) : raw;
+                            secret[i] = Math.max(0, Math.min(safeDepths - 1, normalized));
                         }
                         long created = minigameSection.getLong("created", 0L);
                         int saltVersion = minigameSection.getInt("salt-version", 1);
-                        if (type != null && !type.isBlank() && pins > 0 && depths > 0 && secret.length == pins) {
-                            minigameData = new LockMinigameData(type, pins, depths, secret, created, saltVersion);
+                        if (type != null && !type.isBlank() && secret.length == safePins) {
+                            minigameData = new LockMinigameData(type, safePins, safeDepths, secret, created, saltVersion);
                         }
                     }
                 }
@@ -3109,7 +3171,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 lockSection.set("minigame.depths", mg.depths());
                 List<Integer> secretList = new ArrayList<>(mg.pins());
                 for (int value : mg.secret()) {
-                    secretList.add(value);
+                    secretList.add(Math.max(1, value + 1));
                 }
                 lockSection.set("minigame.secret", secretList);
                 lockSection.set("minigame.created", mg.createdTimestamp());
