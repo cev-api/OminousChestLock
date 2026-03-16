@@ -2,6 +2,7 @@ package net.ozanarchy.chestlock.config;
 
 import net.ozanarchy.chestlock.ChestLockPlugin;
 import net.ozanarchy.chestlock.lock.LockInfo;
+import net.ozanarchy.chestlock.lock.LockMinigameData;
 import net.ozanarchy.chestlock.lock.PickState;
 import net.ozanarchy.chestlock.model.HopperOwner;
 import net.ozanarchy.chestlock.model.LocationData;
@@ -83,6 +84,7 @@ public class DataStore {
             int silenceAttempts = 0;
             int silenceOverLimitAttempts = 0;
             long silencePenaltyTimestamp = 0L;
+            LockMinigameData minigameData = null;
 
             if (section.isString(locationKey)) {
                 keyName = section.getString(locationKey);
@@ -138,6 +140,21 @@ public class DataStore {
                     silenceAttempts = lockSection.getInt("pick.silence.attempts", 0);
                     silenceOverLimitAttempts = lockSection.getInt("pick.silence.over-limit-attempts", 0);
                     silencePenaltyTimestamp = lockSection.getLong("pick.silence.penalty-timestamp", 0L);
+
+                    ConfigurationSection minigameSection = lockSection.getConfigurationSection("minigame");
+                    if (minigameSection != null) {
+                        String type = minigameSection.getString("type", "trial");
+                        int pins = minigameSection.getInt("pins", 4);
+                        int depths = minigameSection.getInt("depths", 4);
+                        java.util.List<Integer> secretList = minigameSection.getIntegerList("secret");
+                        int[] secret = new int[secretList.size()];
+                        for (int i = 0; i < secretList.size(); i++) {
+                            secret[i] = secretList.get(i);
+                        }
+                        long created = minigameSection.getLong("created", 0L);
+                        int saltVersion = minigameSection.getInt("salt-version", 1);
+                        minigameData = new LockMinigameData(type, pins, depths, secret, created, saltVersion);
+                    }
                 }
             }
 
@@ -147,7 +164,7 @@ public class DataStore {
             LockInfo info = new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed,
                     lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
                     rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates);
+                    silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates, minigameData);
             lockedChests.put(locationKey, info);
             keyToChest.putIfAbsent(keyName, locationKey);
         }
@@ -235,6 +252,19 @@ public class DataStore {
                 lockSection.set("pick.silence.attempts", info.silenceAttempts());
                 lockSection.set("pick.silence.over-limit-attempts", info.silenceOverLimitAttempts());
                 lockSection.set("pick.silence.penalty-timestamp", info.silencePenaltyTimestamp());
+            }
+            if (info.minigameData() != null) {
+                ConfigurationSection minigame = lockSection.createSection("minigame");
+                minigame.set("type", info.minigameData().type());
+                minigame.set("pins", info.minigameData().pins());
+                minigame.set("depths", info.minigameData().depths());
+                java.util.List<Integer> secret = new java.util.ArrayList<>();
+                for (int v : info.minigameData().secret()) {
+                    secret.add(v);
+                }
+                minigame.set("secret", secret);
+                minigame.set("created", info.minigameData().createdTimestamp());
+                minigame.set("salt-version", info.minigameData().saltVersion());
             }
         }
         try {

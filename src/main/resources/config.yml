@@ -40,6 +40,16 @@ lockpicks:
       - LODESTONE
   lockout-scope: "chest" # Can be "chest", "player", "global"
   enabled: true
+  minigame:
+    enabled: true
+    trial:
+      pins: 4
+      depths: 4
+    ominous:
+      pins: 6
+      depths: 5
+    ui:
+      pin-icon: END_ROD
 
 keys:
   allow-normal: true # Allow regular trial keys to be used as lock keys (no consumption)

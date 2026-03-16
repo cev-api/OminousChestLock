@@ -74,7 +74,13 @@ public class ConfigCommand implements CommandExecutor, TabCompleter {
                             configManager.getLockoutScope(),
                             configManager.getAllowLockpicks(),
                             configManager.getAllowNormalKeys(),
-                            configManager.getLogLevel()
+                            configManager.getLogLevel(),
+                            configManager.getMinigameEnabled(),
+                            configManager.getMinigameTrialPins(),
+                            configManager.getMinigameTrialDepths(),
+                            configManager.getMinigameOminousPins(),
+                            configManager.getMinigameOminousDepths(),
+                            configManager.getMinigamePinIcon()
                     );
                     sender.sendMessage(Component.text("Logging level set to " + level + "."));
                 } catch (NumberFormatException ex) {
@@ -115,7 +121,13 @@ public class ConfigCommand implements CommandExecutor, TabCompleter {
                         configManager.getLockoutScope(),
                         configManager.getAllowLockpicks(),
                         configManager.getAllowNormalKeys(),
-                        configManager.getLogLevel()
+                        configManager.getLogLevel(),
+                        configManager.getMinigameEnabled(),
+                        configManager.getMinigameTrialPins(),
+                        configManager.getMinigameTrialDepths(),
+                        configManager.getMinigameOminousPins(),
+                        configManager.getMinigameOminousDepths(),
+                        configManager.getMinigamePinIcon()
                 );
                 sender.sendMessage(Component.text("Normal trial keys are now " + (configManager.getAllowNormalKeys() ? "enabled." : "disabled.")));
                 return true;
@@ -153,7 +165,13 @@ public class ConfigCommand implements CommandExecutor, TabCompleter {
                         configManager.getLockoutScope(),
                         configManager.getAllowLockpicks(),
                         configManager.getAllowNormalKeys(),
-                        configManager.getLogLevel()
+                        configManager.getLogLevel(),
+                        configManager.getMinigameEnabled(),
+                        configManager.getMinigameTrialPins(),
+                        configManager.getMinigameTrialDepths(),
+                        configManager.getMinigameOminousPins(),
+                        configManager.getMinigameOminousDepths(),
+                        configManager.getMinigamePinIcon()
                 );
                 lockService.updatePickRecipes(); // Recipes depend on allowLockpicks
                 sender.sendMessage(Component.text("Lockpicking is now " + (configManager.getAllowLockpicks() ? "enabled." : "disabled.")));
@@ -193,7 +211,13 @@ public class ConfigCommand implements CommandExecutor, TabCompleter {
                         configManager.getLockoutScope(),
                         configManager.getAllowLockpicks(),
                         configManager.getAllowNormalKeys(),
-                        configManager.getLogLevel()
+                        configManager.getLogLevel(),
+                        configManager.getMinigameEnabled(),
+                        configManager.getMinigameTrialPins(),
+                        configManager.getMinigameTrialDepths(),
+                        configManager.getMinigameOminousPins(),
+                        configManager.getMinigameOminousDepths(),
+                        configManager.getMinigamePinIcon()
                 );
                 sender.sendMessage(Component.text("Lockout scope set to " + scope.name().toLowerCase() + "."));
                 return true;

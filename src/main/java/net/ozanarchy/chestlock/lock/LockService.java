@@ -15,6 +15,8 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.Sound;
 import org.bukkit.SoundCategory;
 import org.bukkit.World;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.block.Block;
 import org.bukkit.entity.EnderCrystal;
 import org.bukkit.entity.Player;
@@ -27,9 +29,11 @@ import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.RecipeChoice;
 import org.bukkit.inventory.ShapelessRecipe;
 import org.bukkit.inventory.SmithingTransformRecipe;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.projectiles.ProjectileSource;
 import net.ozanarchy.chestlock.ChestLockPlugin; // For scheduler and logger
@@ -41,12 +45,26 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import org.bukkit.event.inventory.ClickType;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
 
 // This class will hold logic related to managing locks, pick attempts, and recipe updates
 public class LockService {
+    private static final int MINIGAME_SIZE = 54;
+    private static final int GRID_FIRST_COLUMN = 1;
+    private static final int GRID_MAX_COLUMNS = 6;
+    private static final int GRID_MAX_ROWS = 5;
+    private static final int SLOT_RESET_ALL = 17;
+    private static final int SLOT_TURN_LOCK = 26;
+    private static final int SLOT_CLOSE = 35;
 
     private final ChestLockPlugin plugin;
     private final Map<String, LockInfo> lockedChests;
@@ -80,6 +98,14 @@ public class LockService {
     private boolean allowNormalKeys;
     private NamespacedKey pickTypeKey;
     private int logLevel; // Also needs to be configured
+    private boolean minigameEnabled;
+    private int minigameTrialPins;
+    private int minigameTrialDepths;
+    private int minigameOminousPins;
+    private int minigameOminousDepths;
+    private Material minigamePinIcon;
+    private final Map<UUID, MinigameSession> minigameSessions = new HashMap<>();
+    private final Map<String, UUID> minigameOwners = new HashMap<>();
 
     public LockService(ChestLockPlugin plugin, Map<String, LockInfo> lockedChests, Map<String, String> keyToChest,
                        Map<String, HopperOwner> hopperOwners, Map<String, Long> logCooldowns,
@@ -116,6 +142,12 @@ public class LockService {
         this.allowNormalKeys = true;
         this.pickTypeKey = new NamespacedKey(plugin, "lock_pick_type");
         this.logLevel = 1; // Info level by default
+        this.minigameEnabled = true;
+        this.minigameTrialPins = 4;
+        this.minigameTrialDepths = 4;
+        this.minigameOminousPins = 6;
+        this.minigameOminousDepths = 5;
+        this.minigamePinIcon = Material.END_ROD;
     }
 
     // Setter for config values, will be called by ConfigManager
@@ -125,7 +157,9 @@ public class LockService {
                                 double normalBreakChance, double silenceBreakChance,
                                 double lodestoneOpenChance, double lodestoneDamage, double lodestoneBreakChance,
                                 long silencePenaltyResetMs,
-                                LockoutScope lockoutScope, boolean allowLockpicks, boolean allowNormalKeys, int logLevel) {
+                                LockoutScope lockoutScope, boolean allowLockpicks, boolean allowNormalKeys, int logLevel,
+                                boolean minigameEnabled, int minigameTrialPins, int minigameTrialDepths,
+                                int minigameOminousPins, int minigameOminousDepths, String minigamePinIcon) {
         this.pickLimitMin = pickLimitMin;
         this.pickLimitMax = pickLimitMax;
         this.rustyNormalKeyChance = rustyNormalKeyChance;
@@ -147,6 +181,13 @@ public class LockService {
         this.allowLockpicks = allowLockpicks;
         this.allowNormalKeys = allowNormalKeys;
         this.logLevel = logLevel;
+        this.minigameEnabled = minigameEnabled;
+        this.minigameTrialPins = Math.max(1, minigameTrialPins);
+        this.minigameTrialDepths = Math.max(1, Math.min(5, minigameTrialDepths));
+        this.minigameOminousPins = Math.max(1, minigameOminousPins);
+        this.minigameOminousDepths = Math.max(1, Math.min(5, minigameOminousDepths));
+        Material icon = Material.matchMaterial(minigamePinIcon == null ? "END_ROD" : minigamePinIcon);
+        this.minigamePinIcon = icon == null ? Material.END_ROD : icon;
 
         // Update ItemUtil with the correct NamespacedKey
         ItemUtil.setPickTypeKey(pickTypeKey);
@@ -271,7 +312,7 @@ public class LockService {
 
         LockInfo info = new LockInfo(keyName, creator.getName(), creator.getUniqueId(), null, null, normalKey, false,
                 null, null, null, 0L,
-                -1, 0, -1, 0, -1, 0, 0, 0L, new HashMap<>());
+                -1, 0, -1, 0, -1, 0, 0, 0L, new HashMap<>(), null);
         for (Location location : locations) {
             lockedChests.put(LocationUtil.locationKey(location), info);
         }
@@ -399,6 +440,12 @@ public class LockService {
         } else if (pickType == PickType.LODESTONE) {
             event.setCancelled(true);
             player.sendMessage(net.kyori.adventure.text.Component.text("A Lodestone Lock Pick can only be used on Lodestones."));
+            return;
+        }
+
+        if (minigameEnabled) {
+            event.setCancelled(true);
+            openMinigame(player, locations, lockInfo, pickType);
             return;
         }
 
@@ -768,6 +815,384 @@ public class LockService {
             if (additionMat == null) plugin.getLogger().warning("Invalid addition for silence_pick: " + cm.getSilenceSmithingAddition());
         }
     }
+
+    public boolean handleMinigameClick(InventoryClickEvent event) {
+        if (!(event.getWhoClicked() instanceof Player player)) {
+            return false;
+        }
+        MinigameSession session = minigameSessions.get(player.getUniqueId());
+        if (session == null || event.getView().getTopInventory() != session.inventory) {
+            return false;
+        }
+        event.setCancelled(true);
+        int slot = event.getRawSlot();
+        if (slot < 0 || slot >= session.inventory.getSize()) {
+            return true;
+        }
+        int depths = Math.min(GRID_MAX_ROWS, session.minigameData.depths());
+        int pins = Math.min(GRID_MAX_COLUMNS, session.minigameData.pins());
+        if (slot == SLOT_TURN_LOCK) {
+            turnLock(player, session);
+            return true;
+        }
+        if (slot == SLOT_RESET_ALL) {
+            for (int p = 0; p < session.eliminated.length; p++) {
+                for (int d = 0; d < session.eliminated[p].length; d++) {
+                    session.eliminated[p][d] = false;
+                }
+                session.selectedDepths[p] = -1;
+            }
+            session.feedbackColor = MinigameSession.FeedbackColor.OFF;
+            session.feedbackProgress = 0.0;
+            renderMinigame(session);
+            return true;
+        }
+        if (slot == SLOT_CLOSE) {
+            player.closeInventory();
+            return true;
+        }
+        int row = slot / 9;
+        int col = slot % 9;
+        int pin = col - GRID_FIRST_COLUMN;
+        int depth = row;
+        if (pin >= 0 && pin < pins && depth >= 0 && depth < depths) {
+            if (event.getClick() == ClickType.RIGHT) {
+                session.eliminated[pin][depth] = !session.eliminated[pin][depth];
+                if (session.eliminated[pin][depth] && session.selectedDepths[pin] == depth) {
+                    session.selectedDepths[pin] = -1;
+                }
+            } else {
+                if (!session.eliminated[pin][depth]) {
+                    session.selectedDepths[pin] = depth;
+                }
+            }
+            renderMinigame(session);
+        }
+        return true;
+    }
+
+    public void handleMinigameClose(InventoryCloseEvent event) {
+        if (!(event.getPlayer() instanceof Player player)) {
+            return;
+        }
+        MinigameSession session = minigameSessions.get(player.getUniqueId());
+        if (session == null) {
+            return;
+        }
+        if (event.getInventory() == session.inventory) {
+            closeMinigame(session.playerId);
+        }
+    }
+
+    public void handlePlayerQuit(Player player) {
+        closeMinigame(player.getUniqueId());
+    }
+
+    private void openMinigame(Player player, List<Location> locations, LockInfo lockInfo, PickType pickType) {
+        String containerId = LocationUtil.locationKey(locations.getFirst());
+        UUID owner = minigameOwners.get(containerId);
+        if (owner != null && !owner.equals(player.getUniqueId())) {
+            player.sendMessage(net.kyori.adventure.text.Component.text("Someone else is currently lockpicking this container."));
+            return;
+        }
+
+        LockInfo updated = ensureMinigameData(locations, lockInfo);
+        LockMinigameData data = updated.minigameData();
+        if (data == null) {
+            return;
+        }
+        Inventory inv = Bukkit.createInventory(player, MINIGAME_SIZE, "Locked Chest");
+        MinigameSession session = new MinigameSession(player.getUniqueId(), containerId, locations, lockInfo.keyName(), pickType, inv, data);
+        minigameSessions.put(player.getUniqueId(), session);
+        minigameOwners.put(containerId, player.getUniqueId());
+        renderMinigame(session);
+        player.openInventory(inv);
+    }
+
+    private LockInfo ensureMinigameData(List<Location> locations, LockInfo lockInfo) {
+        if (lockInfo.minigameData() != null) {
+            return lockInfo;
+        }
+        Location anchor = locations.isEmpty() ? null : locations.getFirst();
+        if (anchor == null || anchor.getWorld() == null) {
+            return lockInfo;
+        }
+        boolean ominous = !lockInfo.normalKey() || anchor.getBlock().getType() == Material.LODESTONE;
+        int pins = ominous ? minigameOminousPins : minigameTrialPins;
+        int depths = ominous ? minigameOminousDepths : minigameTrialDepths;
+        int[] secret = generateSeededSecret(anchor, lockInfo.keyName(), ominous ? "ominous" : "trial", pins, depths);
+        LockMinigameData data = new LockMinigameData(ominous ? "ominous" : "trial", pins, depths, secret, System.currentTimeMillis(), 1);
+        LockInfo updated = lockInfo.withMinigameData(data);
+        updateLockInfo(locations, updated);
+        return updated;
+    }
+
+    private int[] generateSeededSecret(Location location, String keyName, String type, int pins, int depths) {
+        int safePins = Math.max(1, Math.min(GRID_MAX_COLUMNS, pins));
+        int safeDepths = Math.max(1, Math.min(GRID_MAX_ROWS, depths));
+        byte[] seed = createPinSeed(location, keyName, type);
+        Random random = new Random(bytesToLong(seed));
+        int[] secret = new int[safePins];
+        for (int i = 0; i < safePins; i++) {
+            secret[i] = random.nextInt(safeDepths);
+        }
+        return secret;
+    }
+
+    private byte[] createPinSeed(Location location, String keyName, String type) {
+        String worldUid = location.getWorld() == null ? "unknown" : location.getWorld().getUID().toString();
+        String payload = worldUid + "|" + location.getBlockX() + "|" + location.getBlockY() + "|" + location.getBlockZ()
+                + "|" + keyName + "|" + type + "|" + "change-me";
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return digest.digest(payload.getBytes(StandardCharsets.UTF_8));
+        } catch (NoSuchAlgorithmException ignored) {
+            return payload.getBytes(StandardCharsets.UTF_8);
+        }
+    }
+
+    private long bytesToLong(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            return 0L;
+        }
+        long value = 0L;
+        int limit = Math.min(8, bytes.length);
+        for (int i = 0; i < limit; i++) {
+            value = (value << 8) | (bytes[i] & 0xFFL);
+        }
+        return value;
+    }
+
+    private void renderMinigame(MinigameSession session) {
+        Inventory inv = session.inventory;
+        inv.clear();
+        int depths = Math.min(GRID_MAX_ROWS, session.minigameData.depths());
+        int pins = Math.min(GRID_MAX_COLUMNS, session.minigameData.pins());
+
+        ItemStack filler = namedItem(Material.BLACK_STAINED_GLASS_PANE, " ", NamedTextColor.DARK_GRAY, List.of());
+        for (int i = 0; i < MINIGAME_SIZE; i++) {
+            inv.setItem(i, filler);
+        }
+
+        for (int pin = 0; pin < pins; pin++) {
+            for (int depth = 0; depth < depths; depth++) {
+                boolean selected = session.selectedDepths[pin] == depth;
+                boolean eliminated = session.eliminated[pin][depth];
+                Material mat = selected ? minigamePinIcon : (eliminated ? Material.RED_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE);
+                NamedTextColor color = selected ? NamedTextColor.GREEN : (eliminated ? NamedTextColor.RED : NamedTextColor.GRAY);
+                String state = selected ? "Selected" : (eliminated ? "Eliminated" : "Candidate");
+                inv.setItem(depth * 9 + (GRID_FIRST_COLUMN + pin), namedItem(
+                        mat, "Depth " + (depth + 1), color, List.of(
+                                Component.text("Pin " + (pin + 1), NamedTextColor.WHITE),
+                                Component.text(state, color),
+                                Component.text("L-click: select", NamedTextColor.GRAY),
+                                Component.text("R-click: eliminate", NamedTextColor.GRAY)
+                        )));
+            }
+        }
+
+        String lockTypeLabel = "trial".equalsIgnoreCase(session.minigameData.type()) ? "Trial Lock" : "Ominous Lock";
+        inv.setItem(8, namedItem(Material.TRIAL_KEY, "Lock Type: " + lockTypeLabel, NamedTextColor.AQUA, List.of(
+                Component.text("Pick: " + session.pickType.id(), NamedTextColor.GOLD),
+                Component.text("Pins: " + session.minigameData.pins() + "  Depths: " + session.minigameData.depths(), NamedTextColor.GRAY)
+        )));
+        inv.setItem(SLOT_RESET_ALL, namedItem(Material.BARRIER, "Reset All", NamedTextColor.RED, List.of()));
+        inv.setItem(SLOT_TURN_LOCK, namedItem(Material.LEVER, "TURN LOCK", NamedTextColor.GOLD, List.of(
+                Component.text("Attempts are consumed here.", NamedTextColor.YELLOW)
+        )));
+        inv.setItem(SLOT_CLOSE, namedItem(Material.OAK_DOOR, "Close", NamedTextColor.GRAY, List.of()));
+        renderBottomTurnMeter(inv, session);
+    }
+
+    private void renderBottomTurnMeter(Inventory inv, MinigameSession session) {
+        Material meterMat = switch (session.feedbackColor) {
+            case GREEN -> Material.LIME_STAINED_GLASS_PANE;
+            case RED -> Material.RED_STAINED_GLASS_PANE;
+            case YELLOW -> Material.YELLOW_STAINED_GLASS_PANE;
+            default -> Material.GRAY_STAINED_GLASS_PANE;
+        };
+        int lit = (int) Math.round(Math.max(0.0, Math.min(1.0, session.feedbackProgress)) * 9.0);
+        for (int col = 0; col < 9; col++) {
+            if (col < lit) {
+                NamedTextColor color = switch (session.feedbackColor) {
+                    case GREEN -> NamedTextColor.GREEN;
+                    case RED -> NamedTextColor.RED;
+                    case YELLOW -> NamedTextColor.YELLOW;
+                    default -> NamedTextColor.DARK_GRAY;
+                };
+                inv.setItem(45 + col, namedItem(meterMat, " ", color, List.of()));
+            } else {
+                inv.setItem(45 + col, namedItem(Material.BLACK_STAINED_GLASS_PANE, " ", NamedTextColor.DARK_GRAY, List.of()));
+            }
+        }
+    }
+
+    private ItemStack namedItem(Material material, String name, NamedTextColor color, List<Component> lore) {
+        ItemStack item = new ItemStack(material);
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            meta.displayName(Component.text(name, color));
+            if (lore != null && !lore.isEmpty()) {
+                meta.lore(lore);
+            }
+            item.setItemMeta(meta);
+        }
+        return item;
+    }
+
+    private void turnLock(Player player, MinigameSession session) {
+        LockInfo lockInfo = getLockInfo(session.locations);
+        if (lockInfo == null) {
+            player.closeInventory();
+            closeMinigame(player.getUniqueId());
+            return;
+        }
+        int[] secret = session.minigameData.secret();
+        int correctPins = countCorrectPins(session, secret, session.minigameData.depths());
+        boolean allPinsCorrect = correctPins == session.minigameData.pins();
+        PickOutcome outcome = attemptByPickType(player, session.locations.getFirst().getBlock(), lockInfo, session.pickType, allPinsCorrect);
+        if (!outcome.success) {
+            int distance = 0;
+            for (int i = 0; i < secret.length; i++) {
+                int selected = session.selectedDepths[i];
+                int actual = normalizeSecretValue(secret[i], session.minigameData.depths());
+                if (selected < 0) {
+                    distance += session.minigameData.depths();
+                } else {
+                    distance += Math.abs(actual - selected);
+                }
+            }
+            int maxDistance = session.minigameData.pins() * session.minigameData.depths();
+            session.feedbackColor = outcome.lockoutNow ? MinigameSession.FeedbackColor.RED : MinigameSession.FeedbackColor.YELLOW;
+            session.feedbackProgress = Math.max(0.0, Math.min(1.0, 1.0 - ((double) distance / (double) Math.max(1, maxDistance))));
+            renderMinigame(session);
+            String msg = outcome.lockoutNow ? "Locked Out" : "Chest Locked! (Turn Distance: " + distance + ")";
+            player.sendMessage(net.kyori.adventure.text.Component.text(msg));
+            return;
+        }
+        if (!allPinsCorrect) {
+            player.damage(switch (session.pickType) {
+                case RUSTY -> rustyDamage;
+                case NORMAL -> normalDamage;
+                case SILENCE -> silenceDamage;
+                case LODESTONE -> lodestoneDamage;
+            });
+            playWorldSoundDelayed(session.locations.getFirst().getBlock(), Sound.BLOCK_CHEST_LOCKED);
+            session.feedbackColor = MinigameSession.FeedbackColor.RED;
+            session.feedbackProgress = 0.0;
+            renderMinigame(session);
+            player.sendMessage(net.kyori.adventure.text.Component.text("Wrong pin alignment."));
+            return;
+        }
+        session.feedbackColor = MinigameSession.FeedbackColor.GREEN;
+        session.feedbackProgress = 1.0;
+        renderMinigame(session);
+        Block block = session.locations.getFirst().getBlock();
+        LockPickSuccessEvent successEvent = new LockPickSuccessEvent(player, block, lockInfo, session.pickType);
+        Bukkit.getPluginManager().callEvent(successEvent);
+        if (!successEvent.isCancelled()) {
+            unlock(block, session.keyName);
+        }
+        closeMinigame(player.getUniqueId());
+        player.closeInventory();
+        if (!successEvent.isCancelled() && block.getState() instanceof InventoryHolder holder) {
+            player.openInventory(holder.getInventory());
+        }
+    }
+
+    private int countCorrectPins(MinigameSession session, int[] secret, int depths) {
+        int correct = 0;
+        for (int i = 0; i < session.minigameData.pins(); i++) {
+            int actual = normalizeSecretValue(secret[i], depths);
+            if (session.selectedDepths[i] == actual) {
+                correct++;
+            }
+        }
+        return correct;
+    }
+
+    private int normalizeSecretValue(int value, int depths) {
+        if (value >= 0 && value < depths) {
+            return value;
+        }
+        if (value >= 1 && value <= depths) {
+            return value - 1;
+        }
+        return Math.max(0, Math.min(depths - 1, value));
+    }
+
+    private void closeMinigame(UUID playerId) {
+        MinigameSession session = minigameSessions.remove(playerId);
+        if (session == null) {
+            return;
+        }
+        UUID owner = minigameOwners.get(session.containerId);
+        if (owner != null && owner.equals(playerId)) {
+            minigameOwners.remove(session.containerId);
+        }
+    }
+
+    private PickOutcome attemptByPickType(Player player, Block block, LockInfo lockInfo, PickType pickType, boolean allPinsCorrect) {
+        long now = System.currentTimeMillis();
+        boolean success;
+        boolean overLimit = false;
+        boolean lockoutNow = false;
+        LockInfo updated = lockInfo;
+        PickState state = getPickState(lockInfo, player);
+
+        switch (pickType) {
+            case RUSTY -> {
+                int limit = state.rustyLimit();
+                if (limit < 0) {
+                    limit = ThreadLocalRandom.current().nextInt(pickLimitMin, pickLimitMax + 1);
+                    state = state.withRustyLimit(limit);
+                }
+                int attempts = state.rustyAttempts();
+                boolean overLimitBefore = attempts >= limit;
+                lockoutNow = !overLimitBefore && (attempts + 1) >= limit;
+                overLimit = overLimitBefore || lockoutNow;
+                state = state.withRustyAttempts(attempts + 1);
+                success = !overLimitBefore && !lockoutNow && allPinsCorrect;
+            }
+            case NORMAL -> {
+                int limit = state.normalLimit();
+                if (limit < 0) {
+                    limit = ThreadLocalRandom.current().nextInt(pickLimitMin, pickLimitMax + 1);
+                    state = state.withNormalLimit(limit);
+                }
+                int attempts = state.normalAttempts();
+                boolean overLimitBefore = attempts >= limit;
+                lockoutNow = !overLimitBefore && (attempts + 1) >= limit;
+                overLimit = overLimitBefore || lockoutNow;
+                state = state.withNormalAttempts(attempts + 1);
+                success = !overLimitBefore && !lockoutNow && allPinsCorrect;
+            }
+            case SILENCE -> {
+                int limit = state.silenceLimit();
+                if (limit < 0) {
+                    limit = ThreadLocalRandom.current().nextInt(pickLimitMin, pickLimitMax + 1);
+                    state = state.withSilenceLimit(limit);
+                }
+                int attempts = state.silenceAttempts();
+                boolean overLimitBefore = attempts >= limit;
+                lockoutNow = !overLimitBefore && (attempts + 1) >= limit;
+                overLimit = overLimitBefore || lockoutNow;
+                state = state.withSilenceAttempts(attempts + 1);
+                success = !overLimitBefore && !lockoutNow && allPinsCorrect;
+            }
+            case LODESTONE -> {
+                success = allPinsCorrect;
+            }
+            default -> success = false;
+        }
+
+        updated = updated.withLastPick(player, pickType, now);
+        updated = updatePickState(updated, player, state);
+        updateLockInfo(LocationUtil.resolveLockLocations(block), updated);
+        return new PickOutcome(success, overLimit, lockoutNow);
+    }
+
+    private record PickOutcome(boolean success, boolean overLimit, boolean lockoutNow) {}
 
     // --- Logging methods ---
     public void logInventoryMove(org.bukkit.event.inventory.InventoryMoveItemEvent event, String detail) {

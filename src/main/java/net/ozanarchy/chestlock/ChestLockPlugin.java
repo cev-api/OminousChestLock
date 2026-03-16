@@ -68,7 +68,13 @@ public final class ChestLockPlugin extends JavaPlugin {
                 configManager.getLockoutScope(),
                 configManager.getAllowLockpicks(),
                 configManager.getAllowNormalKeys(),
-                configManager.getLogLevel()
+                configManager.getLogLevel(),
+                configManager.getMinigameEnabled(),
+                configManager.getMinigameTrialPins(),
+                configManager.getMinigameTrialDepths(),
+                configManager.getMinigameOminousPins(),
+                configManager.getMinigameOminousDepths(),
+                configManager.getMinigamePinIcon()
         );
 
         lockService.updatePickRecipes();

@@ -28,6 +28,7 @@ public final class LockInfo {
     private final int silenceOverLimitAttempts;
     private final long silencePenaltyTimestamp;
     private final Map<UUID, PickState> playerPickStates;
+    private final LockMinigameData minigameData;
 
     public LockInfo(String keyName, String creatorName, UUID creatorUuid, String lastUserName, UUID lastUserUuid,
                      boolean normalKey, boolean normalArmed,
@@ -36,7 +37,8 @@ public final class LockInfo {
                      int normalLimit, int normalAttempts,
                      int silenceLimit, int silenceAttempts,
                      int silenceOverLimitAttempts, long silencePenaltyTimestamp,
-                     Map<UUID, PickState> playerPickStates) {
+                     Map<UUID, PickState> playerPickStates,
+                     LockMinigameData minigameData) {
         this.keyName = keyName;
         this.creatorName = creatorName;
         this.creatorUuid = creatorUuid;
@@ -57,6 +59,7 @@ public final class LockInfo {
         this.silenceOverLimitAttempts = silenceOverLimitAttempts;
         this.silencePenaltyTimestamp = silencePenaltyTimestamp;
         this.playerPickStates = playerPickStates == null ? new HashMap<>() : new HashMap<>(playerPickStates);
+        this.minigameData = minigameData;
     }
 
     public String keyName() {
@@ -139,6 +142,10 @@ public final class LockInfo {
         return playerPickStates;
     }
 
+    public LockMinigameData minigameData() {
+        return minigameData;
+    }
+
     public PickState toPickState() {
         return new PickState(rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
                 silenceOverLimitAttempts, silencePenaltyTimestamp);
@@ -148,21 +155,21 @@ public final class LockInfo {
         return new LockInfo(keyName, creatorName, creatorUuid, player.getName(), player.getUniqueId(), normalKey, normalArmed,
                 lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
                 rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates);
+                silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates, minigameData);
     }
 
     public LockInfo withNormalArmed(boolean armed) {
         return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, armed,
                 lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
                 rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates);
+                silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates, minigameData);
     }
 
     public LockInfo withLastPick(Player player, PickType pickType, long timestamp) {
         return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed,
                 player.getName(), player.getUniqueId(), pickType.id(), timestamp,
                 rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates);
+                silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates, minigameData);
     }
 
     public LockInfo withPickState(PickState state) {
@@ -173,7 +180,7 @@ public final class LockInfo {
                 lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
                 state.rustyLimit(), state.rustyAttempts(), state.normalLimit(), state.normalAttempts(),
                 state.silenceLimit(), state.silenceAttempts(), state.silenceOverLimitAttempts(),
-                state.silencePenaltyTimestamp(), playerPickStates);
+                state.silencePenaltyTimestamp(), playerPickStates, minigameData);
     }
 
     public LockInfo withPlayerPickState(UUID playerId, PickState state) {
@@ -185,6 +192,13 @@ public final class LockInfo {
         return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed,
                 lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
                 rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                silenceOverLimitAttempts, silencePenaltyTimestamp, updatedStates);
+                silenceOverLimitAttempts, silencePenaltyTimestamp, updatedStates, minigameData);
+    }
+
+    public LockInfo withMinigameData(LockMinigameData data) {
+        return new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed,
+                lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
+                rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
+                silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates, data);
     }
 }

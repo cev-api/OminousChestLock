@@ -16,6 +16,7 @@ import org.bukkit.event.Event;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
@@ -130,6 +131,9 @@ public class ChestInteractListener implements Listener {
 
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
+        if (lockService.handleMinigameClick(event)) {
+            return;
+        }
         if (!(event.getWhoClicked() instanceof Player player)) {
             return;
         }
@@ -166,6 +170,11 @@ public class ChestInteractListener implements Listener {
             lockService.playFail(player, lockService.lockLocation(top));
             lockService.logLockEvent("INVENTORY_DRAG_DENY", player.getName(), lockService.findAnyHeldKey(player) != null ? lockService.findAnyHeldKey(player).name() : null, lockService.lockLocation(top), lockService.getLockInfo(lockService.lockLocation(top)), null);
         }
+    }
+
+    @EventHandler
+    public void onInventoryClose(InventoryCloseEvent event) {
+        lockService.handleMinigameClose(event);
     }
 
     private boolean hasOtherViewers(Inventory inventory, Player player) {

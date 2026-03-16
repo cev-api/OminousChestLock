@@ -29,6 +29,12 @@ public class ConfigManager {
     private boolean allowLockpicks;
     private boolean allowNormalKeys;
     private int logLevel;
+    private boolean minigameEnabled;
+    private int minigameTrialPins;
+    private int minigameTrialDepths;
+    private int minigameOminousPins;
+    private int minigameOminousDepths;
+    private String minigamePinIcon;
 
     private java.util.List<String> rustyRecipe;
     private java.util.List<String> normalRecipe;
@@ -66,6 +72,12 @@ public class ConfigManager {
         allowLockpicks = config.getBoolean("lockpicks.enabled", true);
         allowNormalKeys = config.getBoolean("keys.allow-normal", true);
         logLevel = config.getInt("logging.level", 1);
+        minigameEnabled = config.getBoolean("lockpicks.minigame.enabled", true);
+        minigameTrialPins = Math.max(1, config.getInt("lockpicks.minigame.trial.pins", 4));
+        minigameTrialDepths = Math.min(5, Math.max(1, config.getInt("lockpicks.minigame.trial.depths", 4)));
+        minigameOminousPins = Math.max(1, config.getInt("lockpicks.minigame.ominous.pins", 6));
+        minigameOminousDepths = Math.min(5, Math.max(1, config.getInt("lockpicks.minigame.ominous.depths", 5)));
+        minigamePinIcon = config.getString("lockpicks.minigame.ui.pin-icon", "END_ROD");
 
         rustyRecipe = config.getStringList("lockpicks.rusty.recipe");
         if (rustyRecipe.isEmpty()) {
@@ -108,6 +120,12 @@ public class ConfigManager {
         plugin.saveConfig();
     }
 
+    public void setMinigameEnabled(boolean enabled) {
+        this.minigameEnabled = enabled;
+        config.set("lockpicks.minigame.enabled", enabled);
+        plugin.saveConfig();
+    }
+
 
     // Getters for all config values
     public int getPickLimitMin() { return pickLimitMin; }
@@ -131,6 +149,12 @@ public class ConfigManager {
     public boolean getAllowLockpicks() { return allowLockpicks; }
     public boolean getAllowNormalKeys() { return allowNormalKeys; }
     public int getLogLevel() { return logLevel; }
+    public boolean getMinigameEnabled() { return minigameEnabled; }
+    public int getMinigameTrialPins() { return minigameTrialPins; }
+    public int getMinigameTrialDepths() { return minigameTrialDepths; }
+    public int getMinigameOminousPins() { return minigameOminousPins; }
+    public int getMinigameOminousDepths() { return minigameOminousDepths; }
+    public String getMinigamePinIcon() { return minigamePinIcon; }
 
     public java.util.List<String> getRustyRecipe() { return rustyRecipe; }
     public java.util.List<String> getNormalRecipe() { return normalRecipe; }

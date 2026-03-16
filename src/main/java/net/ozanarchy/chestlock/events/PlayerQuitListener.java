@@ -18,6 +18,6 @@ public class PlayerQuitListener implements Listener {
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        // TODO: Implement player quit event logic
+        lockService.handlePlayerQuit(event.getPlayer());
     }
 }
