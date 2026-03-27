@@ -74,7 +74,6 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -88,6 +87,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private final Map<String, LockInfo> lockedChests = new HashMap<>();
     private final Map<String, String> keyToChest = new HashMap<>();
     private final Map<String, Long> logCooldowns = new HashMap<>();
+    private final Map<String, Long> playerMessageCooldowns = new HashMap<>();
     private final Map<String, PendingIgnite> tntIgnites = new HashMap<>();
     private final Map<UUID, String> tntSources = new HashMap<>();
     private final Map<UUID, PendingIgnite> crystalSources = new HashMap<>();
@@ -97,6 +97,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private final Map<Inventory, MinigameSession> minigameSessionsByInventory = new HashMap<>();
     private int logLevel = 1;
     private boolean allowNormalKeys = false;
+    private boolean verboseMessages = false;
     private boolean allowLockpicks = true;
     private NamespacedKey pickTypeKey;
     private int pickLimitMin = 1;
@@ -406,6 +407,24 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 sender.sendMessage(successLine("Lockpicking is now " + (allowLockpicks ? "enabled." : "disabled.")));
                 return true;
             }
+            case "verbosemessages" -> {
+                if (args.length < 2) {
+                    sender.sendMessage(detailLine("Verbose lock messages", verboseMessages ? "enabled" : "disabled",
+                            verboseMessages ? NamedTextColor.GREEN : NamedTextColor.RED));
+                    sender.sendMessage(errorLine("Usage: /chestlock verbosemessages <on|off>"));
+                    return true;
+                }
+                String value = args[1].toLowerCase();
+                if (!value.equals("on") && !value.equals("off")) {
+                    sender.sendMessage(errorLine("Usage: /chestlock verbosemessages <on|off>"));
+                    return true;
+                }
+                verboseMessages = value.equals("on");
+                getConfig().set("messages.verbose-lock-actions", verboseMessages);
+                saveConfig();
+                sender.sendMessage(successLine("Verbose lock messages are now " + (verboseMessages ? "enabled." : "disabled.")));
+                return true;
+            }
             case "lockoutscope" -> {
                 if (args.length < 2) {
                     sender.sendMessage(detailLine("Lockout scope", lockoutScope.name().toLowerCase(), NamedTextColor.AQUA));
@@ -505,6 +524,8 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                         allowNormalKeys ? NamedTextColor.GREEN : NamedTextColor.RED));
                 sender.sendMessage(detailLine("Lockpicks", allowLockpicks ? "enabled" : "disabled",
                         allowLockpicks ? NamedTextColor.GREEN : NamedTextColor.RED));
+                sender.sendMessage(detailLine("Verbose lock messages", verboseMessages ? "enabled" : "disabled",
+                        verboseMessages ? NamedTextColor.GREEN : NamedTextColor.RED));
                 sender.sendMessage(detailLine("Lockout scope", lockoutScope.name().toLowerCase(), NamedTextColor.GOLD));
                 sender.sendMessage(detailLine("Limit range", pickLimitMin + " - " + pickLimitMax, NamedTextColor.YELLOW));
 
@@ -583,7 +604,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         }
         if (args.length == 1) {
             return List.of("info", "unlock", "keyinfo", "reload", "loglevel", "normalkeys", "lockpicks", "minigame",
-                    "minigamebossbar", "minigamevisual", "pinicon", "lockoutscope", "settings", "give", "help");
+                    "minigamebossbar", "minigamevisual", "pinicon", "verbosemessages", "lockoutscope", "settings", "give", "help");
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("loglevel")) {
             return List.of("0", "1", "2", "3");
@@ -592,6 +613,9 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             return List.of("on", "off");
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("lockpicks")) {
+            return List.of("on", "off");
+        }
+        if (args.length == 2 && args[0].equalsIgnoreCase("verbosemessages")) {
             return List.of("on", "off");
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("minigame")) {
@@ -645,6 +669,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         sender.sendMessage(helpLine("/chestlock loglevel <0-3>", "set log verbosity"));
         sender.sendMessage(helpLine("/chestlock normalkeys <on|off>", "allow normal trial keys"));
         sender.sendMessage(helpLine("/chestlock lockpicks <on|off>", "allow lock picking and crafting"));
+        sender.sendMessage(helpLine("/chestlock verbosemessages <on|off>", "toggle verbose lock/unlock chat"));
         sender.sendMessage(helpLine("/chestlock minigame <on|off>", "toggle lockpick minigame mode"));
         sender.sendMessage(helpLine("/chestlock minigamebossbar <on|off>", "toggle minigame bossbar feedback"));
         sender.sendMessage(helpLine("/chestlock minigamevisual <on|off>", "toggle minigame inventory meter feedback"));
@@ -1007,6 +1032,9 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         animateTurnBossbar(player, session, shownProgress, result, pickBroken, () -> {
             unlock(session.locations.getFirst().getBlock(), lockInfo.keyName());
             playSuccess(player, session.locations.getFirst());
+            if (verboseMessages) {
+                player.sendMessage(successLine("Chest lock successfully picked."));
+            }
             logLockEvent("PICK_SUCCESS", player.getName(), null, session.locations.getFirst(), lockInfo, attemptDetail);
             openUnlockedContainer(player, session.locations.getFirst().getBlock());
             endMinigameSession(session, false, null);
@@ -1972,6 +2000,9 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
 
         if (success) {
             unlock(block, lockInfo.keyName());
+            if (verboseMessages) {
+                player.sendMessage(successLine("Chest lock successfully picked."));
+            }
             logLockEvent("PICK_SUCCESS", player.getName(), null, block.getLocation(), lockInfo, "pick=" + pickType.id);
             if (pickType == PickType.SILENCE) {
                 playWorldSoundDelayed(block, Sound.BLOCK_VAULT_OPEN_SHUTTER);
@@ -2090,6 +2121,11 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                         } else {
                             event.setCancelled(true);
                             playFail(event.getPlayer(), block.getLocation());
+                            if (heldKeyName == null) {
+                                event.getPlayer().sendMessage(errorLine("This chest is locked. You need the correct key."));
+                            } else {
+                                event.getPlayer().sendMessage(errorLine("Wrong key."));
+                            }
                             logLockEvent("INTERACT_DENY", event.getPlayer().getName(), heldKeyName, block.getLocation(), existingLock, null);
                         }
                     }
@@ -2102,11 +2138,14 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
 
                 if (!tryLock(block, heldKeyName, event.getPlayer(), heldKey != null && heldKey.normal())) {
                     playFail(event.getPlayer(), block.getLocation());
-                    logLockEvent("LOCK_DENY", event.getPlayer().getName(), heldKeyName, block.getLocation(), null, "key already used or locked by another key");
+                    logLockEvent("LOCK_DENY", event.getPlayer().getName(), heldKeyName, block.getLocation(), null, "container already locked with another key");
                     return;
                 }
 
                 playInsert(event.getPlayer(), block.getLocation());
+                if (verboseMessages) {
+                    event.getPlayer().sendMessage(successLine("Chest locked to key: " + heldKeyName));
+                }
                 logLockEvent("LOCK_CREATED", event.getPlayer().getName(), heldKeyName, block.getLocation(), getLockInfo(block), null);
             }
             default -> {
@@ -2137,6 +2176,12 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         if (heldKeyName == null || !lockInfo.keyName().equals(heldKeyName)) {
             event.setCancelled(true);
             playFail(player, locations.getFirst());
+            String anyHeldKey = getHeldKeyName(player);
+            if (anyHeldKey == null) {
+                player.sendMessage(errorLine("This chest is locked. You need the correct key."));
+            } else {
+                player.sendMessage(errorLine("Wrong key."));
+            }
             logLockEvent("OPEN_DENY", player.getName(), heldKeyName, locations.getFirst(), lockInfo, "wrong or missing key");
             return;
         }
@@ -2155,6 +2200,9 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             if (lockInfo.normalArmed()) {
                 unlock(locations.getFirst().getBlock(), lockInfo.keyName());
                 consumeOneKey(player, keyMatch);
+                if (verboseMessages) {
+                    player.sendMessage(successLine("Chest unlocked with key: " + heldKeyName));
+                }
                 logLockEvent("NORMAL_KEY_CONSUMED", player.getName(), heldKeyName, locations.getFirst(), lockInfo, null);
             } else {
                 armNormalKeyLock(locations);
@@ -2348,11 +2396,17 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         if (heldKeyName == null || !lockInfo.keyName().equals(heldKeyName)) {
             event.setCancelled(true);
             playFail(event.getPlayer(), block.getLocation());
+            if (shouldSendPlayerMessage(event.getPlayer().getUniqueId(), "break-deny:" + locationKey(block.getLocation()), 1250L)) {
+                event.getPlayer().sendMessage(errorLine("This chest is locked and cannot be broken."));
+            }
             logLockEvent("BREAK_DENY", event.getPlayer().getName(), heldKeyName, block.getLocation(), lockInfo, null);
             return;
         }
 
         unlock(block, lockInfo.keyName());
+        if (verboseMessages && shouldSendPlayerMessage(event.getPlayer().getUniqueId(), "break-ok:" + locationKey(block.getLocation()), 1250L)) {
+            event.getPlayer().sendMessage(successLine("Chest unlocked with key: " + heldKeyName));
+        }
         logLockEvent("BREAK_ALLOWED", event.getPlayer().getName(), heldKeyName, block.getLocation(), lockInfo, null);
     }
 
@@ -2421,25 +2475,25 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         if (locations.isEmpty()) {
             return false;
         }
-
-        Set<String> locationKeys = new HashSet<>();
+        Set<String> currentLocationKeys = new java.util.HashSet<>();
         for (Location location : locations) {
-            locationKeys.add(locationKey(location));
-        }
-
-        String mappedLocation = keyToChest.get(keyName);
-        if (mappedLocation != null && !locationKeys.contains(mappedLocation)) {
-            LockInfo mappedInfo = lockedChests.get(mappedLocation);
-            if (mappedInfo == null || !mappedInfo.keyName().equals(keyName)) {
-                keyToChest.remove(keyName);
-            } else {
-                return false;
-            }
+            currentLocationKeys.add(locationKey(location));
         }
 
         for (Location location : locations) {
             LockInfo existing = lockedChests.get(locationKey(location));
             if (existing != null && !existing.keyName().equals(keyName)) {
+                return false;
+            }
+        }
+        for (Map.Entry<String, LockInfo> entry : lockedChests.entrySet()) {
+            LockInfo existing = entry.getValue();
+            if (existing == null || !keyName.equals(existing.keyName())) {
+                continue;
+            }
+            boolean sameOwner = creator.getUniqueId().equals(existing.creatorUuid())
+                    || (existing.creatorUuid() == null && creator.getName().equals(existing.creatorName()));
+            if (sameOwner && !currentLocationKeys.contains(entry.getKey())) {
                 return false;
             }
         }
@@ -2450,7 +2504,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         for (Location location : locations) {
             lockedChests.put(locationKey(location), info);
         }
-        keyToChest.putIfAbsent(keyName, locationKeys.iterator().next());
+        keyToChest.putIfAbsent(keyName, locationKey(locations.getFirst()));
         saveData();
         return true;
     }
@@ -2467,8 +2521,22 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         for (Location location : locations) {
             lockedChests.remove(locationKey(location));
         }
-        keyToChest.remove(keyName);
+        refreshKeyMapping(keyName);
         saveData();
+    }
+
+    private void refreshKeyMapping(String keyName) {
+        if (keyName == null || keyName.isBlank()) {
+            return;
+        }
+        for (Map.Entry<String, LockInfo> entry : lockedChests.entrySet()) {
+            LockInfo info = entry.getValue();
+            if (info != null && keyName.equals(info.keyName())) {
+                keyToChest.put(keyName, entry.getKey());
+                return;
+            }
+        }
+        keyToChest.remove(keyName);
     }
 
     private boolean isLockable(Block block) {
@@ -2704,6 +2772,20 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         return true;
     }
 
+    private boolean shouldSendPlayerMessage(UUID playerId, String actionKey, long cooldownMs) {
+        if (playerId == null || actionKey == null) {
+            return true;
+        }
+        long now = System.currentTimeMillis();
+        String key = playerId + "|" + actionKey;
+        Long last = playerMessageCooldowns.get(key);
+        if (last != null && now - last < cooldownMs) {
+            return false;
+        }
+        playerMessageCooldowns.put(key, now);
+        return true;
+    }
+
     private boolean isDestructionAction(String action) {
         return "BREAK_DENY".equals(action)
                 || "EXPLOSION_DENY".equals(action)
@@ -2728,6 +2810,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private void loadConfigValues() {
         logLevel = getConfig().getInt("logging.level", 1);
         allowNormalKeys = getConfig().getBoolean("keys.allow-normal", false);
+        verboseMessages = getConfig().getBoolean("messages.verbose-lock-actions", false);
         allowLockpicks = getConfig().getBoolean("lockpicks.enabled", true);
         pickLimitMin = Math.max(1, getConfig().getInt("lockpicks.limit.min", 1));
         pickLimitMax = Math.max(pickLimitMin, getConfig().getInt("lockpicks.limit.max", 20));

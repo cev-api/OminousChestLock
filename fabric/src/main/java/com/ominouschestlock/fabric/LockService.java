@@ -85,6 +85,7 @@ public final class LockService {
     private final Map<String, LockInfo> lockedChests = new HashMap<>();
     private final Map<String, String> keyToChest = new HashMap<>();
     private final Map<String, Long> logCooldowns = new HashMap<>();
+    private final Map<String, Long> playerMessageCooldowns = new HashMap<>();
     private final Map<UUID, String> tntSources = new HashMap<>();
     private final Map<UUID, PendingIgnite> crystalSources = new HashMap<>();
     private final Map<String, HopperOwner> hopperOwners = new HashMap<>();
@@ -109,6 +110,7 @@ public final class LockService {
     private double silenceDamage = 4.0;
     private long silencePenaltyResetMs = SILENCE_PENALTY_RESET_MS;
     private LockoutScope lockoutScope = LockoutScope.CHEST;
+    private boolean verboseMessages = false;
 
     private final Yaml yaml = new Yaml();
     private Path configDir;
@@ -151,6 +153,11 @@ public final class LockService {
                     return InteractionResult.PASS;
                 }
                 playFail(serverPlayer, world, pos);
+                if (heldKeyName == null) {
+                    serverPlayer.sendSystemMessage(errorLine("This chest is locked. You need the correct key."), false);
+                } else {
+                    serverPlayer.sendSystemMessage(errorLine("Wrong key."), false);
+                }
                 logLockEvent("INTERACT_DENY", serverPlayer.getName().getString(), heldKeyName, world, pos, existingLock, null);
                 return InteractionResult.FAIL;
             }
@@ -166,11 +173,14 @@ public final class LockService {
         if (!tryLock(world, locations, heldKeyName, serverPlayer, heldKey.normal())) {
             playFail(serverPlayer, world, pos);
             logLockEvent("LOCK_DENY", serverPlayer.getName().getString(), heldKeyName, world, pos, null,
-                    "key already used or locked by another key");
+                    "container already locked with another key");
             return InteractionResult.FAIL;
         }
 
         playInsert(serverPlayer, world, pos);
+        if (verboseMessages) {
+            serverPlayer.sendSystemMessage(successLine("Chest locked to key: " + heldKeyName), false);
+        }
         logLockEvent("LOCK_CREATED", serverPlayer.getName().getString(), heldKeyName, world, pos,
                 getLockInfo(world, locations), null);
         return InteractionResult.PASS;
@@ -199,10 +209,16 @@ public final class LockService {
         if (heldKeyName == null || !lockInfo.keyName().equals(heldKeyName)) {
             playFail(serverPlayer, (ServerLevel) world, pos);
             logLockEvent("BREAK_DENY", serverPlayer.getName().getString(), heldKeyName, world, pos, lockInfo, null);
+            if (shouldSendPlayerMessage(serverPlayer.getUUID(), "break-deny:" + locationKey(world, pos), 1250L)) {
+                serverPlayer.sendSystemMessage(errorLine("This container is locked and cannot be broken."), false);
+            }
             return false;
         }
 
         unlock(world, locations, lockInfo.keyName());
+        if (verboseMessages && shouldSendPlayerMessage(serverPlayer.getUUID(), "break-ok:" + locationKey(world, pos), 1250L)) {
+            serverPlayer.sendSystemMessage(successLine("Chest unlocked with key: " + heldKeyName), false);
+        }
         logLockEvent("BREAK_ALLOWED", serverPlayer.getName().getString(), heldKeyName, world, pos, lockInfo, null);
         return true;
     }
@@ -386,6 +402,25 @@ public final class LockService {
                             ctx.getSource().sendSystemMessage(detailLine("Lockpicking", allowLockpicks ? "enabled" : "disabled", allowLockpicks ? ChatFormatting.GREEN : ChatFormatting.RED));
                             return 1;
                         }))
+                .then(literal("verbosemessages")
+                        .then(argument("value", StringArgumentType.word())
+                                .suggests((ctx, builder) -> SharedSuggestionProvider.suggest(List.of("on", "off"), builder))
+                                .executes(ctx -> {
+                            String value = StringArgumentType.getString(ctx, "value").toLowerCase(Locale.ROOT);
+                            if (!value.equals("on") && !value.equals("off")) {
+                                ctx.getSource().sendSystemMessage(errorLine("Usage: /chestlock verbosemessages <on|off>"));
+                                return 1;
+                            }
+                            verboseMessages = value.equals("on");
+                            saveConfigValue("messages.verbose-lock-actions", verboseMessages);
+                            ctx.getSource().sendSystemMessage(successLine("Verbose lock messages are now " + (verboseMessages ? "enabled." : "disabled.")));
+                            return 1;
+                        }))
+                        .executes(ctx -> {
+                            ctx.getSource().sendSystemMessage(detailLine("Verbose lock messages", verboseMessages ? "enabled" : "disabled",
+                                    verboseMessages ? ChatFormatting.GREEN : ChatFormatting.RED));
+                            return 1;
+                        }))
                 .then(literal("lockoutscope")
                         .then(argument("value", StringArgumentType.word())
                                 .suggests((ctx, builder) -> SharedSuggestionProvider.suggest(List.of("chest", "player"), builder))
@@ -404,6 +439,19 @@ public final class LockService {
                             ctx.getSource().sendSystemMessage(detailLine("Lockout scope", lockoutScope.name().toLowerCase(Locale.ROOT), ChatFormatting.AQUA));
                             return 1;
                         }))
+                .then(literal("settings").executes(ctx -> {
+                    ctx.getSource().sendSystemMessage(statusLine("ChestLock settings"));
+                    ctx.getSource().sendSystemMessage(detailLine("Logging level", String.valueOf(logLevel), ChatFormatting.AQUA));
+                    ctx.getSource().sendSystemMessage(detailLine("Normal trial keys", allowNormalKeys ? "enabled" : "disabled",
+                            allowNormalKeys ? ChatFormatting.GREEN : ChatFormatting.RED));
+                    ctx.getSource().sendSystemMessage(detailLine("Lockpicks", allowLockpicks ? "enabled" : "disabled",
+                            allowLockpicks ? ChatFormatting.GREEN : ChatFormatting.RED));
+                    ctx.getSource().sendSystemMessage(detailLine("Verbose lock messages", verboseMessages ? "enabled" : "disabled",
+                            verboseMessages ? ChatFormatting.GREEN : ChatFormatting.RED));
+                    ctx.getSource().sendSystemMessage(detailLine("Lockout scope", lockoutScope.name().toLowerCase(Locale.ROOT), ChatFormatting.GOLD));
+                    ctx.getSource().sendSystemMessage(detailLine("Limit range", pickLimitMin + " - " + pickLimitMax, ChatFormatting.YELLOW));
+                    return 1;
+                }))
                 .then(literal("help").executes(ctx -> sendHelp(ctx.getSource())))
         );
     }
@@ -448,7 +496,9 @@ public final class LockService {
         source.sendSystemMessage(helpLine("/chestlock loglevel <0-3>", "set log verbosity"));
         source.sendSystemMessage(helpLine("/chestlock normalkeys <on|off>", "allow normal trial keys"));
         source.sendSystemMessage(helpLine("/chestlock lockpicks <on|off>", "allow lock picking"));
+        source.sendSystemMessage(helpLine("/chestlock verbosemessages <on|off>", "toggle verbose lock/unlock chat"));
         source.sendSystemMessage(helpLine("/chestlock lockoutscope <chest|player>", "set lockout scope"));
+        source.sendSystemMessage(helpLine("/chestlock settings", "show current loaded settings"));
         source.sendSystemMessage(helpLine("/chestlock give <player> <rusty|normal|silence> [amount]", "give lock picks"));
         return 1;
     }
@@ -499,6 +549,12 @@ public final class LockService {
         String heldKeyName = keyMatch == null ? null : keyMatch.name();
         if (heldKeyName == null || !lockKey.equals(heldKeyName)) {
             playFail(player, world, locations.getFirst());
+            String anyHeldKey = getHeldKeyName(player);
+            if (anyHeldKey == null) {
+                player.sendSystemMessage(errorLine("This chest is locked. You need the correct key."), false);
+            } else {
+                player.sendSystemMessage(errorLine("Wrong key."), false);
+            }
             logLockEvent("OPEN_DENY", player.getName().getString(), heldKeyName, world, locations.getFirst(),
                     lockInfo, "wrong or missing key");
             return false;
@@ -519,6 +575,9 @@ public final class LockService {
             if (lockInfo.normalArmed()) {
                 unlock(world, locations, lockInfo.keyName());
                 consumeOneKey(player, keyMatch);
+                if (verboseMessages) {
+                    player.sendSystemMessage(successLine("Chest unlocked with key: " + heldKeyName), false);
+                }
                 logLockEvent("NORMAL_KEY_CONSUMED", player.getName().getString(), heldKeyName, world, locations.getFirst(), lockInfo, null);
             } else {
                 armNormalKeyLock(world, locations);
@@ -811,6 +870,9 @@ public final class LockService {
 
         if (success) {
             unlock(world, locations, lockInfo.keyName());
+            if (verboseMessages) {
+                player.sendSystemMessage(successLine("Chest lock successfully picked."), false);
+            }
             logLockEvent("PICK_SUCCESS", player.getName().getString(), null, world, pos, lockInfo, "pick=" + pickType.id);
             if (pickType == PickType.SILENCE) {
                 openSilently(player, world, pos);
@@ -974,24 +1036,25 @@ public final class LockService {
         if (locations.isEmpty()) {
             return false;
         }
-        Set<String> locationKeys = new HashSet<>();
+        Set<String> currentLocationKeys = new HashSet<>();
         for (BlockPos location : locations) {
-            locationKeys.add(locationKey(world, location));
-        }
-
-        String mappedLocation = keyToChest.get(keyName);
-        if (mappedLocation != null && !locationKeys.contains(mappedLocation)) {
-            LockInfo mappedInfo = lockedChests.get(mappedLocation);
-            if (mappedInfo == null || !mappedInfo.keyName().equals(keyName)) {
-                keyToChest.remove(keyName);
-            } else {
-                return false;
-            }
+            currentLocationKeys.add(locationKey(world, location));
         }
 
         for (BlockPos location : locations) {
             LockInfo existing = lockedChests.get(locationKey(world, location));
             if (existing != null && !existing.keyName().equals(keyName)) {
+                return false;
+            }
+        }
+        for (Map.Entry<String, LockInfo> entry : lockedChests.entrySet()) {
+            LockInfo existing = entry.getValue();
+            if (existing == null || !keyName.equals(existing.keyName())) {
+                continue;
+            }
+            boolean sameOwner = creator.getUUID().equals(existing.creatorUuid())
+                    || (existing.creatorUuid() == null && creator.getName().getString().equals(existing.creatorName()));
+            if (sameOwner && !currentLocationKeys.contains(entry.getKey())) {
                 return false;
             }
         }
@@ -1002,7 +1065,7 @@ public final class LockService {
         for (BlockPos location : locations) {
             lockedChests.put(locationKey(world, location), info);
         }
-        keyToChest.put(keyName, locationKey(world, locations.getFirst()));
+        keyToChest.putIfAbsent(keyName, locationKey(world, locations.getFirst()));
         saveData();
         return true;
     }
@@ -1011,8 +1074,22 @@ public final class LockService {
         for (BlockPos location : locations) {
             lockedChests.remove(locationKey(world, location));
         }
-        keyToChest.remove(keyName);
+        refreshKeyMapping(keyName);
         saveData();
+    }
+
+    private void refreshKeyMapping(String keyName) {
+        if (keyName == null || keyName.isBlank()) {
+            return;
+        }
+        for (Map.Entry<String, LockInfo> entry : lockedChests.entrySet()) {
+            LockInfo info = entry.getValue();
+            if (info != null && keyName.equals(info.keyName())) {
+                keyToChest.put(keyName, entry.getKey());
+                return;
+            }
+        }
+        keyToChest.remove(keyName);
     }
 
     private void storeLockInfo(Level world, List<BlockPos> locations, LockInfo info) {
@@ -1262,6 +1339,20 @@ public final class LockService {
         return true;
     }
 
+    private boolean shouldSendPlayerMessage(UUID playerId, String actionKey, long cooldownMs) {
+        if (playerId == null || actionKey == null) {
+            return true;
+        }
+        long now = System.currentTimeMillis();
+        String key = playerId + "|" + actionKey;
+        Long last = playerMessageCooldowns.get(key);
+        if (last != null && now - last < cooldownMs) {
+            return false;
+        }
+        playerMessageCooldowns.put(key, now);
+        return true;
+    }
+
     private boolean isDestructionAction(String action) {
         return "BREAK_DENY".equals(action)
                 || "EXPLOSION_DENY".equals(action)
@@ -1377,6 +1468,7 @@ public final class LockService {
         Map<String, Object> config = loadYaml(configFile);
         logLevel = readInt(config, "logging.level", 1);
         allowNormalKeys = readBoolean(config, "keys.allow-normal", false);
+        verboseMessages = readBoolean(config, "messages.verbose-lock-actions", false);
         allowLockpicks = readBoolean(config, "lockpicks.enabled", true);
         pickLimitMin = Math.max(1, readInt(config, "lockpicks.limit.min", 1));
         pickLimitMax = Math.max(pickLimitMin, readInt(config, "lockpicks.limit.max", 20));

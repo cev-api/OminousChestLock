@@ -4,6 +4,9 @@ logging:
 keys:
   # false = ominous trial keys only, true = ominous + normal trial keys
   allow-normal: false
+messages:
+  # true = send the acting player lock/unlock status chat messages
+  verbose-lock-actions: false
 lockpicks:
   # true = allow lock pick crafting and usage
   enabled: true

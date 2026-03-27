@@ -9,10 +9,22 @@ Paper plugin (1.21.0–1.21.11+) and Fabric server mod (1.21.11) that locks ches
 - Right-click a chest, barrel, or shulker box while holding that key to lock it.
 - Only players holding a matching named key can open, break, or otherwise interact with the locked container.
 - Locks are key-name based, not player based. Keys can be stolen or copied.
-- One key name can only lock one container at a time until that container is unlocked/destroyed.
+- One player can lock only one container per key name at a time.
+- Different players can reuse the same key name for their own single container.
+- If two players use the same key name, either matching key can open either container.
 - Optional: normal trial keys can be enabled. The first successful open with a normal key arms the lock; the next successful open consumes the key and permanently unlocks the container.
 
 Vault sounds are used for success/failure feedback.
+
+### Player feedback messages
+- Opening a locked container with no key shows: `This chest is locked. You need the correct key.`
+- Opening a locked container with the wrong key shows: `Wrong key.`
+- Breaking a locked container without the correct key shows: `This chest is locked and cannot be broken.`
+- Break-attempt chat warnings are rate-limited to avoid spam when repeatedly attempting to break.
+- Successful lockpicking does not reveal the key name in chat (`Chest lock successfully picked.`).
+- Optional verbose lock/unlock chat can be toggled with:
+  - Config: `messages.verbose-lock-actions`
+  - Command: `/chestlock verbosemessages <on|off>`
 
 ## Lock picking
 
@@ -123,6 +135,7 @@ Requires `chestlock.admin` (default: op).
 - `/chestlock loglevel <0-3>` - Set log verbosity.
 - `/chestlock normalkeys <on|off>` - Allow normal trial keys.
 - `/chestlock lockpicks <on|off>` - Allow lock picking and crafting.
+- `/chestlock verbosemessages <on|off>` - Toggle verbose lock/unlock chat messages.
 - `/chestlock minigame <on|off>` - Toggle lockpick minigame mode.
 - `/chestlock minigamebossbar <on|off>` - Toggle bossbar feedback for minigame.
 - `/chestlock minigamevisual <on|off>` - Toggle inventory meter visual feedback for minigame.
@@ -142,6 +155,9 @@ Config in `plugins/OminousChestLock/config.yml`:
 - `keys.allow-normal`:
   - `false` = ominous keys only
   - `true` = ominous + normal trial keys
+- `messages.verbose-lock-actions`:
+  - `false` = no optional verbose lock/unlock action chat
+  - `true` = show lock/unlock action chat to the acting player only
 - `lockpicks.enabled`:
   - `false` = lock pick crafting/usage disabled
   - `true` = lock pick crafting/usage enabled
@@ -182,6 +198,9 @@ logging:
 keys:
   # false = ominous trial keys only, true = ominous + normal trial keys
   allow-normal: true
+messages:
+  # true = send the acting player lock/unlock status chat messages
+  verbose-lock-actions: false
 lockpicks:
   # true = allow lock pick crafting and usage
   enabled: true
