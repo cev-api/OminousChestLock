@@ -16,7 +16,7 @@ public abstract class ServerPlayNetworkHandlerMixin {
 
     @Inject(method = "handleContainerClick", at = @At("HEAD"), cancellable = true)
     private void chestlock$handleContainerClick(ServerboundContainerClickPacket packet, CallbackInfo ci) {
-        if (ChestLockFabric.getService().shouldBlockScreenInteraction(player)) {
+        if (ChestLockFabric.getService().shouldBlockScreenInteraction(player, packet)) {
             ci.cancel();
         }
     }

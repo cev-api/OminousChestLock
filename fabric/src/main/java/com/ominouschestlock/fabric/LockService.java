@@ -31,6 +31,7 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.network.protocol.game.ClientboundStopSoundPacket;
+import net.minecraft.network.protocol.game.ServerboundContainerClickPacket;
 import net.minecraft.server.permissions.LevelBasedPermissionSet;
 import net.minecraft.server.permissions.PermissionSet;
 import net.minecraft.commands.SharedSuggestionProvider;
@@ -44,6 +45,8 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.resources.Identifier;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.ClickType;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.level.Level;
@@ -81,6 +84,7 @@ public final class LockService {
     private static final int RUSTY_MODEL_DATA = 11001;
     private static final int NORMAL_MODEL_DATA = 11002;
     private static final int SILENCE_MODEL_DATA = 11003;
+    private static final int PLAYER_INVENTORY_SLOT_COUNT = 36;
 
     private final Map<String, LockInfo> lockedChests = new HashMap<>();
     private final Map<String, String> keyToChest = new HashMap<>();
@@ -601,7 +605,7 @@ public final class LockService {
         }
     }
 
-    public boolean shouldBlockScreenInteraction(ServerPlayer player) {
+    public boolean shouldBlockScreenInteraction(ServerPlayer player, ServerboundContainerClickPacket packet) {
         String locationKey = openLockByPlayer.get(player.getUUID());
         if (locationKey == null) {
             return false;
@@ -611,15 +615,76 @@ public final class LockService {
             return false;
         }
         String heldKeyName = getHeldKeyName(player);
+        LocationData data = parseLocationKey(locationKey, player.level());
+        BlockPos pos = data == null ? player.blockPosition() : data.pos();
+        if (isPlacingMatchingLockKey(player, packet, info.keyName())) {
+            logLockEvent("INVENTORY_KEY_PLACE_DENY", player.getName().getString(), info.keyName(),
+                    player.level(), pos, info, null);
+            return true;
+        }
         if (heldKeyName == null || !info.keyName().equals(heldKeyName)) {
-            LocationData data = parseLocationKey(locationKey, player.level());
-            BlockPos pos = data == null ? player.blockPosition() : data.pos();
             playFail(player, player.level(), pos);
             logLockEvent("INVENTORY_CLICK_DENY", player.getName().getString(), heldKeyName,
                     player.level(), pos, info, null);
             return true;
         }
         return false;
+    }
+
+    private boolean isPlacingMatchingLockKey(ServerPlayer player, ServerboundContainerClickPacket packet, String lockName) {
+        if (packet == null || lockName == null) {
+            return false;
+        }
+        AbstractContainerMenu menu = player.containerMenu;
+        if (menu == null) {
+            return false;
+        }
+        int topSize = Math.max(0, menu.slots.size() - PLAYER_INVENTORY_SLOT_COUNT);
+        if (topSize <= 0) {
+            return false;
+        }
+        int slotNum = packet.slotNum();
+        ClickType clickType = packet.clickType();
+        boolean clickingTop = slotNum >= 0 && slotNum < topSize;
+        boolean clickingPlayerInventory = slotNum >= topSize && slotNum < menu.slots.size();
+
+        if (clickingTop && clickType == ClickType.PICKUP && isMatchingContainerKey(menu.getCarried(), lockName)) {
+            return true;
+        }
+
+        if (clickType == ClickType.QUICK_MOVE && clickingPlayerInventory && slotNum < menu.slots.size()) {
+            ItemStack clicked = menu.getSlot(slotNum).getItem();
+            if (isMatchingContainerKey(clicked, lockName)) {
+                return true;
+            }
+        }
+
+        if (clickingTop && clickType == ClickType.SWAP) {
+            ItemStack swapItem = getSwapClickItem(player, packet.buttonNum());
+            if (isMatchingContainerKey(swapItem, lockName)) {
+                return true;
+            }
+        }
+
+        if (clickType == ClickType.QUICK_CRAFT && isMatchingContainerKey(menu.getCarried(), lockName)) {
+            for (int changedSlot : packet.changedSlots().keySet()) {
+                if (changedSlot >= 0 && changedSlot < topSize) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private ItemStack getSwapClickItem(ServerPlayer player, int buttonNum) {
+        if (buttonNum >= 0 && buttonNum < 9) {
+            return player.getInventory().getItem(buttonNum);
+        }
+        if (buttonNum == 40) {
+            return player.getOffhandItem();
+        }
+        return ItemStack.EMPTY;
     }
 
     public boolean onPistonMove(ServerLevel world, List<BlockPos> blocks) {
@@ -1231,6 +1296,14 @@ public final class LockService {
         }
         String name = displayName.getString().trim();
         return name.isEmpty() ? null : name;
+    }
+
+    private boolean isMatchingContainerKey(ItemStack itemStack, String lockName) {
+        if (lockName == null) {
+            return false;
+        }
+        String keyName = getKeyName(itemStack);
+        return keyName != null && lockName.equals(keyName);
     }
 
     private String locationKey(Level world, BlockPos pos) {

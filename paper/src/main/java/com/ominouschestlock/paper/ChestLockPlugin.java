@@ -46,6 +46,8 @@ import org.bukkit.event.entity.EntitySpawnEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.inventory.InventoryAction;
+import org.bukkit.event.inventory.ClickType;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.inventory.InventoryPickupItemEvent;
 import org.bukkit.event.inventory.InventoryMoveItemEvent;
@@ -2232,6 +2234,12 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         if (lockName == null) {
             return;
         }
+        if (isPlacingMatchingLockKey(event, player, top, lockName)) {
+            event.setCancelled(true);
+            Location location = lockLocation(top);
+            logLockEvent("INVENTORY_KEY_PLACE_DENY", player.getName(), lockName, location, getLockInfo(location), null);
+            return;
+        }
         if (!lockName.equals(getHeldKeyName(player))) {
             event.setCancelled(true);
             playFail(player, lockLocation(top));
@@ -2256,6 +2264,14 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         String lockName = getLockKeyName(top);
         if (lockName == null) {
             return;
+        }
+        for (int rawSlot : event.getRawSlots()) {
+            if (rawSlot >= 0 && rawSlot < top.getSize() && isMatchingContainerKey(event.getOldCursor(), lockName)) {
+                event.setCancelled(true);
+                Location location = lockLocation(top);
+                logLockEvent("INVENTORY_KEY_PLACE_DENY", player.getName(), lockName, location, getLockInfo(location), null);
+                return;
+            }
         }
         if (!lockName.equals(getHeldKeyName(player))) {
             event.setCancelled(true);
@@ -2940,6 +2956,44 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         return getKeyName(player.getInventory().getItemInOffHand());
     }
 
+    private boolean isPlacingMatchingLockKey(InventoryClickEvent event, Player player, Inventory top, String lockName) {
+        int rawSlot = event.getRawSlot();
+        int topSize = top.getSize();
+        boolean clickingTop = rawSlot >= 0 && rawSlot < topSize;
+
+        if (clickingTop && isMatchingContainerKey(event.getCursor(), lockName)) {
+            InventoryAction action = event.getAction();
+            if (action == InventoryAction.PLACE_ALL
+                    || action == InventoryAction.PLACE_ONE
+                    || action == InventoryAction.PLACE_SOME
+                    || action == InventoryAction.SWAP_WITH_CURSOR) {
+                return true;
+            }
+        }
+
+        if (event.getAction() == InventoryAction.MOVE_TO_OTHER_INVENTORY
+                && rawSlot >= topSize
+                && isMatchingContainerKey(event.getCurrentItem(), lockName)) {
+            return true;
+        }
+
+        if (clickingTop && event.getClick() == ClickType.NUMBER_KEY) {
+            int hotbarSlot = event.getHotbarButton();
+            if (hotbarSlot >= 0 && hotbarSlot < 9) {
+                ItemStack hotbarItem = player.getInventory().getItem(hotbarSlot);
+                if (isMatchingContainerKey(hotbarItem, lockName)) {
+                    return true;
+                }
+            }
+        }
+
+        if (clickingTop && event.getClick() == ClickType.SWAP_OFFHAND) {
+            return isMatchingContainerKey(player.getInventory().getItemInOffHand(), lockName);
+        }
+
+        return false;
+    }
+
     private KeyMatch findHeldKey(Player player, String requiredName) {
         KeyMatch main = getKeyMatch(player.getInventory().getItemInMainHand(), EquipmentSlot.HAND, requiredName);
         if (main != null) {
@@ -2998,6 +3052,14 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         }
         String name = TEXT_SERIALIZER.serialize(displayName).strip();
         return name.isEmpty() ? null : name;
+    }
+
+    private boolean isMatchingContainerKey(ItemStack itemStack, String lockName) {
+        if (lockName == null) {
+            return false;
+        }
+        String keyName = getKeyName(itemStack);
+        return keyName != null && lockName.equals(keyName);
     }
 
     private String locationKey(Location location) {
