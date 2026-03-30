@@ -10,6 +10,7 @@ java {
 
 dependencies {
     compileOnly("io.papermc.paper:paper-api:${property("paperApiVersion")}")
+    compileOnly("com.github.MilkBowl:VaultAPI:1.7.1")
     implementation(project(":common"))
 }
 

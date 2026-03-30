@@ -1,6 +1,8 @@
 package com.ominouschestlock.paper;
 
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.event.HoverEvent;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
@@ -63,10 +65,13 @@ import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.SmithingTransformRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.Tag;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.projectiles.ProjectileSource;
 import org.bukkit.scheduler.BukkitTask;
+import net.milkbowl.vault.economy.Economy;
+import net.milkbowl.vault.economy.EconomyResponse;
 
 import java.io.File;
 import java.io.IOException;
@@ -81,6 +86,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Locale;
 import java.util.concurrent.ThreadLocalRandom;
 
 public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCompleter {
@@ -97,6 +103,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private final Map<String, MinigameSession> minigameSessionsByContainer = new HashMap<>();
     private final Map<UUID, MinigameSession> minigameSessionsByPlayer = new HashMap<>();
     private final Map<Inventory, MinigameSession> minigameSessionsByInventory = new HashMap<>();
+    private final Map<UUID, PendingPaidUnlock> pendingPaidUnlocks = new HashMap<>();
     private int logLevel = 1;
     private boolean allowNormalKeys = false;
     private boolean verboseMessages = false;
@@ -137,6 +144,9 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private boolean trialAssistEliminateOne = true;
     private boolean trialRegenerateOnAttempt = false;
     private boolean ominousRegenerateOnAttempt = true;
+    private boolean paidUnlockEnabled = false;
+    private double paidUnlockCost = 5000.0;
+    private Economy economy;
 
     private static final long SILENCE_PENALTY_RESET_MS = 60L * 60L * 1000L;
     private static final int RUSTY_MODEL_DATA = 11001;
@@ -149,6 +159,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private static final int SLOT_RESET_ALL = 17;
     private static final int SLOT_TURN_LOCK = 26;
     private static final int SLOT_CLOSE = 35;
+    private static final long PAID_UNLOCK_CONFIRM_TIMEOUT_MS = 30000L;
 
     private File dataFile;
 
@@ -156,14 +167,20 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     public void onEnable() {
         dataFile = new File(getDataFolder(), "data.yml");
         saveDefaultConfig();
+        warnIfXmlConfigPresent();
         pickTypeKey = new NamespacedKey(this, "lock_pick_type");
         loadConfigValues();
+        setupEconomy();
         loadData();
         updatePickRecipes();
         getServer().getPluginManager().registerEvents(this, this);
         if (getCommand("chestlock") != null) {
             getCommand("chestlock").setExecutor(this);
             getCommand("chestlock").setTabCompleter(this);
+        }
+        if (getCommand("chestlockrecover") != null) {
+            getCommand("chestlockrecover").setExecutor(this);
+            getCommand("chestlockrecover").setTabCompleter(this);
         }
     }
 
@@ -172,11 +189,15 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         for (MinigameSession session : new ArrayList<>(minigameSessionsByPlayer.values())) {
             endMinigameSession(session, false, null);
         }
+        pendingPaidUnlocks.clear();
         saveData();
     }
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (command.getName().equalsIgnoreCase("chestlockrecover")) {
+            return handlePaidUnlockCommand(sender, args);
+        }
         if (!command.getName().equalsIgnoreCase("chestlock")) {
             return false;
         }
@@ -309,10 +330,15 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             }
             case "reload" -> {
                 reloadConfig();
+                warnIfXmlConfigPresent();
                 loadConfigValues();
+                setupEconomy();
                 loadData();
                 updatePickRecipes();
-                sender.sendMessage(successLine("ChestLock data reloaded."));
+                sender.sendMessage(successLine("ChestLock data reloaded from config.yml."));
+                if (hasXmlConfigFile()) {
+                    sender.sendMessage(errorLine("Found config.xml, but this plugin only reads config.yml."));
+                }
                 return true;
             }
             case "give" -> {
@@ -530,6 +556,11 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                         verboseMessages ? NamedTextColor.GREEN : NamedTextColor.RED));
                 sender.sendMessage(detailLine("Lockout scope", lockoutScope.name().toLowerCase(), NamedTextColor.GOLD));
                 sender.sendMessage(detailLine("Limit range", pickLimitMin + " - " + pickLimitMax, NamedTextColor.YELLOW));
+                sender.sendMessage(detailLine("Locksmith recovery", paidUnlockEnabled ? "enabled" : "disabled",
+                        paidUnlockEnabled ? NamedTextColor.GREEN : NamedTextColor.RED));
+                sender.sendMessage(detailLine("Locksmith fee", formatCurrency(paidUnlockCost), NamedTextColor.GOLD));
+                String economyState = economy == null ? "not hooked (need Vault + economy provider)" : economy.getName();
+                sender.sendMessage(detailLine("Economy provider", economyState, economy == null ? NamedTextColor.RED : NamedTextColor.GREEN));
 
                 sender.sendMessage(statusLine("Pick values"));
                 sender.sendMessage(detailLine("Rusty chance/break/dmg",
@@ -601,6 +632,12 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        if (command.getName().equalsIgnoreCase("chestlockrecover")) {
+            if (args.length == 1) {
+                return List.of("confirm");
+            }
+            return List.of();
+        }
         if (!command.getName().equalsIgnoreCase("chestlock")) {
             return List.of();
         }
@@ -1027,7 +1064,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             }
         }
         if (pickBroken) {
-            playWorldSoundDelayed(session.locations.getFirst().getBlock(), Sound.ENTITY_ITEM_BREAK);
+            playPickFeedbackSound(session.locations.getFirst().getBlock(), player, session.pickType, Sound.ENTITY_ITEM_BREAK);
         }
         boolean noSameTypeInHand = !hasHeldPickType(player, session.pickType);
 
@@ -1057,12 +1094,12 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
 
         player.damage(result.damageOnFail);
         if (result.lockoutHard) {
-            playWorldSoundDelayed(session.locations.getFirst().getBlock(), Sound.BLOCK_VAULT_DEACTIVATE);
-            playWorldSoundDelayed(session.locations.getFirst().getBlock(), Sound.BLOCK_VAULT_HIT);
+            playPickFeedbackSound(session.locations.getFirst().getBlock(), player, session.pickType, Sound.BLOCK_VAULT_DEACTIVATE);
+            playPickFeedbackSound(session.locations.getFirst().getBlock(), player, session.pickType, Sound.BLOCK_VAULT_HIT);
         } else if (result.overLimit) {
-            playWorldSoundDelayed(session.locations.getFirst().getBlock(), Sound.BLOCK_VAULT_HIT);
+            playPickFeedbackSound(session.locations.getFirst().getBlock(), player, session.pickType, Sound.BLOCK_VAULT_HIT);
         } else {
-            playWorldSoundDelayed(session.locations.getFirst().getBlock(), Sound.BLOCK_CHEST_LOCKED);
+            playPickFeedbackSound(session.locations.getFirst().getBlock(), player, session.pickType, Sound.BLOCK_CHEST_LOCKED);
         }
         logLockEvent("PICK_FAIL", player.getName(), null, session.locations.getFirst(), lockInfo,
                 attemptDetail);
@@ -1889,12 +1926,12 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 if (!success) {
                     player.damage(rustyDamage);
                     if (lockoutNow) {
-                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_DEACTIVATE);
-                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_HIT);
+                        playPickFeedbackSound(block, player, pickType, Sound.BLOCK_VAULT_DEACTIVATE);
+                        playPickFeedbackSound(block, player, pickType, Sound.BLOCK_VAULT_HIT);
                     } else if (overLimitBefore) {
-                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_HIT);
+                        playPickFeedbackSound(block, player, pickType, Sound.BLOCK_VAULT_HIT);
                     } else {
-                        playWorldSoundDelayed(block, Sound.BLOCK_CHEST_LOCKED);
+                        playPickFeedbackSound(block, player, pickType, Sound.BLOCK_CHEST_LOCKED);
                     }
                 } else {
                     playWorldSoundDelayed(block, Sound.BLOCK_TRIPWIRE_CLICK_ON);
@@ -1918,12 +1955,12 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 if (!success) {
                     player.damage(normalDamage);
                     if (lockoutNow) {
-                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_DEACTIVATE);
-                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_HIT);
+                        playPickFeedbackSound(block, player, pickType, Sound.BLOCK_VAULT_DEACTIVATE);
+                        playPickFeedbackSound(block, player, pickType, Sound.BLOCK_VAULT_HIT);
                     } else if (overLimitBefore) {
-                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_HIT);
+                        playPickFeedbackSound(block, player, pickType, Sound.BLOCK_VAULT_HIT);
                     } else {
-                        playWorldSoundDelayed(block, Sound.BLOCK_CHEST_LOCKED);
+                        playPickFeedbackSound(block, player, pickType, Sound.BLOCK_CHEST_LOCKED);
                     }
                 } else {
                     playWorldSoundDelayed(block, Sound.BLOCK_TRIPWIRE_CLICK_ON);
@@ -1962,10 +1999,10 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                     chance = chance / Math.pow(2.0, penaltySteps);
                     player.damage(silenceDamage);
                     if (criticalOverLimit) {
-                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_DEACTIVATE);
-                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_HIT);
+                        playPickFeedbackSound(block, player, pickType, Sound.BLOCK_VAULT_DEACTIVATE);
+                        playPickFeedbackSound(block, player, pickType, Sound.BLOCK_VAULT_HIT);
                     } else if (overLimitBefore) {
-                        playWorldSoundDelayed(block, Sound.BLOCK_VAULT_HIT);
+                        playPickFeedbackSound(block, player, pickType, Sound.BLOCK_VAULT_HIT);
                     }
                     overLimitAttempts += 1;
                     if (penaltyTimestamp <= 0L) {
@@ -2041,6 +2078,22 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 () -> world.playSound(block.getLocation(), sound, SoundCategory.MASTER, 1.6f, 1.0f));
     }
 
+    private void playPickFeedbackSound(Block block, Player player, PickType pickType, Sound sound) {
+        if (block == null || sound == null) {
+            return;
+        }
+        if (pickType == PickType.SILENCE && player != null) {
+            World world = block.getWorld();
+            if (world == null) {
+                return;
+            }
+            Bukkit.getScheduler().runTask(this,
+                    () -> player.playSound(block.getLocation(), sound, SoundCategory.MASTER, 1.6f, 1.0f));
+            return;
+        }
+        playWorldSoundDelayed(block, sound);
+    }
+
     private void consumeOnePick(Player player, PickMatch match) {
         ItemStack stack = match.slot() == EquipmentSlot.HAND
                 ? player.getInventory().getItemInMainHand()
@@ -2107,6 +2160,13 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 LockInfo existingLock = getLockInfo(block);
                 if (existingLock != null) {
                     if (heldKeyName == null || !existingLock.keyName().equals(heldKeyName)) {
+                        if (heldKeyName == null
+                                && tryOfferPaidRecoveryUnlockInteract(event.getPlayer(), block, existingLock)) {
+                            event.setCancelled(true);
+                            event.setUseInteractedBlock(Result.DENY);
+                            event.setUseItemInHand(Result.DENY);
+                            return;
+                        }
                         PickMatch pickMatch = findHeldPick(event.getPlayer());
                         if (pickMatch != null) {
                             if (minigameEnabled) {
@@ -2176,6 +2236,9 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         KeyMatch keyMatch = findHeldKey(player, lockInfo.keyName());
         String heldKeyName = keyMatch == null ? null : keyMatch.name();
         if (heldKeyName == null || !lockInfo.keyName().equals(heldKeyName)) {
+            if (tryOfferPaidRecoveryUnlock(event, player, inventory, locations, lockInfo, heldKeyName)) {
+                return;
+            }
             event.setCancelled(true);
             playFail(player, locations.getFirst());
             String anyHeldKey = getHeldKeyName(player);
@@ -2867,6 +2930,36 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         trialAssistEliminateOne = getConfig().getBoolean("lockpicks.minigame.trial.assist-eliminate-one", true);
         trialRegenerateOnAttempt = getConfig().getBoolean("lockpicks.minigame.trial.regenerate-on-attempt", false);
         ominousRegenerateOnAttempt = getConfig().getBoolean("lockpicks.minigame.ominous.regenerate-on-attempt", true);
+        paidUnlockEnabled = getConfig().getBoolean("recovery.paid-unlock.enabled", false);
+        paidUnlockCost = Math.max(0.0, getConfig().getDouble("recovery.paid-unlock.cost", 5000.0));
+    }
+
+    private void setupEconomy() {
+        economy = null;
+        if (!paidUnlockEnabled) {
+            return;
+        }
+        if (getServer().getPluginManager().getPlugin("Vault") == null) {
+            getLogger().warning("Paid unlock is enabled but Vault is not installed. Recovery unlock is disabled.");
+            return;
+        }
+        RegisteredServiceProvider<Economy> registration = getServer().getServicesManager().getRegistration(Economy.class);
+        if (registration == null || registration.getProvider() == null) {
+            getLogger().warning("Paid unlock is enabled but no Vault economy provider was found. Recovery unlock is disabled.");
+            return;
+        }
+        economy = registration.getProvider();
+        getLogger().info("Paid unlock economy provider: " + economy.getName());
+    }
+
+    private void warnIfXmlConfigPresent() {
+        if (hasXmlConfigFile()) {
+            getLogger().warning("Found config.xml, but ChestLock only reads config.yml. Update plugins/OminousChestLock/config.yml instead.");
+        }
+    }
+
+    private boolean hasXmlConfigFile() {
+        return new File(getDataFolder(), "config.xml").exists();
     }
 
     private double clampChance(double value) {
@@ -2954,6 +3047,196 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             return main;
         }
         return getKeyName(player.getInventory().getItemInOffHand());
+    }
+
+    private boolean tryOfferPaidRecoveryUnlock(InventoryOpenEvent event, Player player, Inventory inventory,
+                                               List<Location> locations, LockInfo lockInfo, String heldKeyName) {
+        if (!paidUnlockEnabled || lockInfo == null || locations.isEmpty()) {
+            return false;
+        }
+        if (heldKeyName != null) {
+            return false;
+        }
+        if (!isLockOwnerAndLastUser(player, lockInfo)) {
+            if (matchesPlayer(lockInfo.creatorUuid(), lockInfo.creatorName(), player)) {
+                String lastUser = lockInfo.lastUserName() == null ? "unknown" : lockInfo.lastUserName();
+                player.sendMessage(errorLine("Locksmith service requires owner + last user. Current last user: " + lastUser));
+            }
+            return false;
+        }
+        if (playerHasMatchingKeyInInventory(player, lockInfo.keyName())) {
+            return false;
+        }
+        if (economy == null) {
+            event.setCancelled(true);
+            playFail(player, locations.getFirst());
+            player.sendMessage(errorLine("Locksmith service unavailable: need Vault + an economy plugin, then /chestlock reload."));
+            logLockEvent("PAID_UNLOCK_DENY", player.getName(), null, locations.getFirst(), lockInfo, "economy unavailable");
+            return true;
+        }
+        if (hasOtherViewers(inventory, player)) {
+            return false;
+        }
+        event.setCancelled(true);
+        String locationKey = locationKey(locations.getFirst());
+        pendingPaidUnlocks.put(player.getUniqueId(),
+                new PendingPaidUnlock(locationKey, lockInfo.keyName(), System.currentTimeMillis()));
+        player.sendMessage(statusLine("Lost your key?"));
+        player.sendMessage(Component.text("[Click here to pay locksmith service fee " + formatCurrency(paidUnlockCost) + "]", NamedTextColor.GREEN, TextDecoration.BOLD)
+                .clickEvent(ClickEvent.runCommand("/chestlockrecover confirm"))
+                .hoverEvent(HoverEvent.showText(Component.text("Confirm locksmith service fee", NamedTextColor.YELLOW))));
+        player.sendMessage(detailLine("Or type", "/chestlockrecover confirm", NamedTextColor.AQUA));
+        logLockEvent("PAID_UNLOCK_OFFER", player.getName(), null, locations.getFirst(), lockInfo, "cost=" + paidUnlockCost);
+        return true;
+    }
+
+    private boolean tryOfferPaidRecoveryUnlockInteract(Player player, Block block, LockInfo lockInfo) {
+        if (player == null || block == null || lockInfo == null || !paidUnlockEnabled) {
+            return false;
+        }
+        List<Location> locations = resolveLockLocations(block);
+        if (locations.isEmpty()) {
+            return false;
+        }
+        if (!isLockOwnerAndLastUser(player, lockInfo)) {
+            if (matchesPlayer(lockInfo.creatorUuid(), lockInfo.creatorName(), player)) {
+                String lastUser = lockInfo.lastUserName() == null ? "unknown" : lockInfo.lastUserName();
+                player.sendMessage(errorLine("Locksmith service requires owner + last user. Current last user: " + lastUser));
+            }
+            return false;
+        }
+        if (playerHasMatchingKeyInInventory(player, lockInfo.keyName())) {
+            return false;
+        }
+        if (economy == null) {
+            playFail(player, locations.getFirst());
+            player.sendMessage(errorLine("Locksmith service unavailable: need Vault + an economy plugin, then /chestlock reload."));
+            logLockEvent("PAID_UNLOCK_DENY", player.getName(), null, locations.getFirst(), lockInfo, "economy unavailable");
+            return true;
+        }
+        if (block.getState() instanceof InventoryHolder holder && hasOtherViewers(holder.getInventory(), player)) {
+            return false;
+        }
+        pendingPaidUnlocks.put(player.getUniqueId(),
+                new PendingPaidUnlock(locationKey(locations.getFirst()), lockInfo.keyName(), System.currentTimeMillis()));
+        player.sendMessage(statusLine("Lost your key?"));
+        player.sendMessage(Component.text("[Click here to pay locksmith service fee " + formatCurrency(paidUnlockCost) + "]", NamedTextColor.GREEN, TextDecoration.BOLD)
+                .clickEvent(ClickEvent.runCommand("/chestlockrecover confirm"))
+                .hoverEvent(HoverEvent.showText(Component.text("Confirm locksmith service fee", NamedTextColor.YELLOW))));
+        player.sendMessage(detailLine("Or type", "/chestlockrecover confirm", NamedTextColor.AQUA));
+        logLockEvent("PAID_UNLOCK_OFFER", player.getName(), null, locations.getFirst(), lockInfo, "cost=" + paidUnlockCost);
+        return true;
+    }
+
+    private boolean isLockOwnerAndLastUser(Player player, LockInfo lockInfo) {
+        if (player == null || lockInfo == null) {
+            return false;
+        }
+        boolean ownerMatches = matchesPlayer(lockInfo.creatorUuid(), lockInfo.creatorName(), player);
+        boolean lastUserMatches = matchesPlayer(lockInfo.lastUserUuid(), lockInfo.lastUserName(), player);
+        // Backward compatibility for older lock entries that may not have last-user populated.
+        if (!lastUserMatches && lockInfo.lastUserUuid() == null
+                && (lockInfo.lastUserName() == null || lockInfo.lastUserName().isBlank())) {
+            lastUserMatches = ownerMatches;
+        }
+        return ownerMatches && lastUserMatches;
+    }
+
+    private boolean matchesPlayer(UUID uuid, String name, Player player) {
+        if (uuid != null) {
+            return uuid.equals(player.getUniqueId());
+        }
+        if (name != null && !name.isBlank()) {
+            return name.equalsIgnoreCase(player.getName());
+        }
+        return false;
+    }
+
+    private String formatCurrency(double amount) {
+        if (economy != null) {
+            return economy.format(amount);
+        }
+        return String.format(Locale.US, "$%.2f", amount);
+    }
+
+    private boolean playerHasMatchingKeyInInventory(Player player, String lockName) {
+        if (player == null || lockName == null || lockName.isBlank()) {
+            return false;
+        }
+        for (ItemStack item : player.getInventory().getStorageContents()) {
+            if (isMatchingContainerKey(item, lockName)) {
+                return true;
+            }
+        }
+        return isMatchingContainerKey(player.getInventory().getItemInOffHand(), lockName);
+    }
+
+    private boolean handlePaidUnlockCommand(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(errorLine("This command can only be used by players."));
+            return true;
+        }
+        if (args.length == 0 || !args[0].equalsIgnoreCase("confirm")) {
+            player.sendMessage(errorLine("Usage: /chestlockrecover confirm"));
+            return true;
+        }
+        if (!paidUnlockEnabled || economy == null) {
+            player.sendMessage(errorLine("Paid recovery unlock is not available right now."));
+            return true;
+        }
+        PendingPaidUnlock pending = pendingPaidUnlocks.get(player.getUniqueId());
+        if (pending == null) {
+            player.sendMessage(errorLine("No pending locksmith service prompt. Open your locked chest first."));
+            return true;
+        }
+        if (System.currentTimeMillis() - pending.createdAtMs() > PAID_UNLOCK_CONFIRM_TIMEOUT_MS) {
+            pendingPaidUnlocks.remove(player.getUniqueId());
+            player.sendMessage(errorLine("Locksmith service prompt expired. Open the chest again."));
+            return true;
+        }
+        LocationData data = parseLocationKey(pending.locationKey());
+        World world = data == null ? null : Bukkit.getWorld(data.worldName());
+        if (data == null || world == null) {
+            pendingPaidUnlocks.remove(player.getUniqueId());
+            player.sendMessage(errorLine("Locksmith service failed: chest location not available."));
+            return true;
+        }
+        Location location = new Location(world, data.x(), data.y(), data.z());
+        LockInfo lockInfo = lockedChests.get(pending.locationKey());
+        if (lockInfo == null || !pending.lockName().equals(lockInfo.keyName())) {
+            pendingPaidUnlocks.remove(player.getUniqueId());
+            player.sendMessage(errorLine("That lock is no longer available for recovery."));
+            return true;
+        }
+        if (!isLockOwnerAndLastUser(player, lockInfo)) {
+            pendingPaidUnlocks.remove(player.getUniqueId());
+            player.sendMessage(errorLine("You are not eligible to recover this lock."));
+            return true;
+        }
+        if (getHeldKeyName(player) != null || playerHasMatchingKeyInInventory(player, lockInfo.keyName())) {
+            pendingPaidUnlocks.remove(player.getUniqueId());
+            player.sendMessage(errorLine("You already have a key for this lock."));
+            return true;
+        }
+        if (paidUnlockCost > 0.0 && !economy.has(player, paidUnlockCost)) {
+            player.sendMessage(errorLine("Locksmith service fee is " + formatCurrency(paidUnlockCost) + ". You don't have enough."));
+            return true;
+        }
+        if (paidUnlockCost > 0.0) {
+            EconomyResponse response = economy.withdrawPlayer(player, paidUnlockCost);
+            if (response == null || !response.transactionSuccess()) {
+                String detail = response == null ? "withdraw failed" : response.errorMessage;
+                player.sendMessage(errorLine("Locksmith service payment failed. Try again later."));
+                logLockEvent("PAID_UNLOCK_DENY", player.getName(), null, location, lockInfo, detail);
+                return true;
+            }
+        }
+        pendingPaidUnlocks.remove(player.getUniqueId());
+        unlock(location.getBlock(), lockInfo.keyName());
+        playSuccess(player, location);
+        player.sendMessage(successLine("Recovered lock: locksmith service fee paid (" + formatCurrency(paidUnlockCost) + ")."));
+        logLockEvent("PAID_UNLOCK", player.getName(), null, location, lockInfo, "cost=" + paidUnlockCost);
+        return true;
     }
 
     private boolean isPlacingMatchingLockKey(InventoryClickEvent event, Player player, Inventory top, String lockName) {
@@ -3343,9 +3626,11 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     public void onPlayerQuit(PlayerQuitEvent event) {
         MinigameSession session = minigameSessionsByPlayer.get(event.getPlayer().getUniqueId());
         if (session == null) {
+            pendingPaidUnlocks.remove(event.getPlayer().getUniqueId());
             return;
         }
         endMinigameSession(session, false, null);
+        pendingPaidUnlocks.remove(event.getPlayer().getUniqueId());
     }
 
     private LocationData parseLocationKey(String locationKey) {
@@ -3385,6 +3670,9 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             case THE_END -> "END";
             default -> environment.name();
         };
+    }
+
+    private record PendingPaidUnlock(String locationKey, String lockName, long createdAtMs) {
     }
 
     private record TurnAttemptResult(boolean success,

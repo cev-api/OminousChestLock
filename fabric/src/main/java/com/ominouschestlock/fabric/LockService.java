@@ -908,9 +908,9 @@ public final class LockService {
                 if (!success) {
                     damagePlayer(player, silenceDamage);
                     if (lockoutNow) {
-                        playWorldSoundDelayed(world, pos, SoundEvents.VAULT_DEACTIVATE);
+                        playPickFeedbackSound(player, world, pos, pickType, SoundEvents.VAULT_DEACTIVATE);
                     } else if (overLimitBefore) {
-                        playWorldSoundDelayed(world, pos, SoundEvents.VAULT_HIT);
+                        playPickFeedbackSound(player, world, pos, pickType, SoundEvents.VAULT_HIT);
                     }
                 } else {
                     playWorldSoundDelayed(world, pos, SoundEvents.TRIPWIRE_CLICK_ON);
@@ -1003,6 +1003,14 @@ public final class LockService {
             return;
         }
         server.execute(() -> serverWorld.playSound(null, pos, sound, SoundSource.BLOCKS, 1.6f, 1.0f));
+    }
+
+    private void playPickFeedbackSound(ServerPlayer player, Level world, BlockPos pos, PickType pickType, SoundEvent sound) {
+        if (pickType == PickType.SILENCE && player != null) {
+            player.playSound(sound, 1.6f, 1.0f);
+            return;
+        }
+        playWorldSoundDelayed(world, pos, sound);
     }
 
     private void playSuccess(ServerPlayer player, Level world, BlockPos pos) {

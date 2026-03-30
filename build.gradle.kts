@@ -9,6 +9,7 @@ allprojects {
         mavenCentral()
         maven("https://repo.papermc.io/repository/maven-public/")
         maven("https://maven.fabricmc.net/")
+        maven("https://jitpack.io")
     }
 }
 

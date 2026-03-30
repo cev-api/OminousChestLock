@@ -2,11 +2,15 @@ name: OminousChestLock
 main: com.ominouschestlock.paper.ChestLockPlugin
 version: ${version}
 api-version: "1.21"
+softdepend: [Vault, Essentials]
 commands:
   chestlock:
     description: Admin commands for ChestLock
     usage: "/chestlock <info|unlock|reload|keyinfo|loglevel|normalkeys|lockpicks|minigame|lockoutscope|give|help>"
     permission: chestlock.admin
+  chestlockrecover:
+    description: Confirm paid recovery unlock after prompt
+    usage: "/chestlockrecover confirm"
 permissions:
   chestlock.admin:
     description: Allows use of ChestLock admin commands

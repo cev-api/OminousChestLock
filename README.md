@@ -13,6 +13,7 @@ Paper plugin (1.21.0–1.21.11+) and Fabric server mod (1.21.11) that locks ches
 - Different players can reuse the same key name for their own single container.
 - If two players use the same key name, either matching key can open either container.
 - Optional: normal trial keys can be enabled. The first successful open with a normal key arms the lock; the next successful open consumes the key and permanently unlocks the container.
+- Paper only: optional paid recovery via Vault economy. If the player is both the lock owner and last user, has no matching key in hand or inventory, they get a clickable locksmith service fee prompt (or `/chestlockrecover confirm`) to unlock.
 
 Vault sounds are used for success/failure feedback.
 
@@ -25,6 +26,7 @@ Vault sounds are used for success/failure feedback.
 - Optional verbose lock/unlock chat can be toggled with:
   - Config: `messages.verbose-lock-actions`
   - Command: `/chestlock verbosemessages <on|off>`
+- Eligible paid recovery shows a clickable locksmith service fee prompt and `/chestlockrecover confirm` fallback.
 
 ## Lock picking
 
@@ -144,6 +146,7 @@ Requires `chestlock.admin` (default: op).
 - `/chestlock settings` - Show current loaded settings with color formatting.
 - `/chestlock give <player> <rusty|normal|silence> [amount]` - Give lock picks to a player.
 - `/chestlock help` - Show help.
+- `/chestlockrecover confirm` - Confirm locksmith service fee unlock after prompt (Paper + Vault economy only).
 
 ## Config
 Config in `plugins/OminousChestLock/config.yml`:
@@ -158,6 +161,11 @@ Config in `plugins/OminousChestLock/config.yml`:
 - `messages.verbose-lock-actions`:
   - `false` = no optional verbose lock/unlock action chat
   - `true` = show lock/unlock action chat to the acting player only
+- `recovery.paid-unlock.enabled` (Paper only):
+  - `false` = locksmith service recovery disabled
+  - `true` = allows eligible players to confirm paid recovery unlock
+- `recovery.paid-unlock.cost` (Paper only):
+  - locksmith service fee amount charged by Vault economy provider
 - `lockpicks.enabled`:
   - `false` = lock pick crafting/usage disabled
   - `true` = lock pick crafting/usage enabled
@@ -201,6 +209,12 @@ keys:
 messages:
   # true = send the acting player lock/unlock status chat messages
   verbose-lock-actions: false
+recovery:
+  paid-unlock:
+    # requires Vault + an economy provider (e.g., EssentialsX Economy via Vault)
+    enabled: false
+    # locksmith service fee to recover a lock when eligible
+    cost: 5000.0
 lockpicks:
   # true = allow lock pick crafting and usage
   enabled: true

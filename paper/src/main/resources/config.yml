@@ -7,6 +7,12 @@ keys:
 messages:
   # true = send the acting player lock/unlock status chat messages
   verbose-lock-actions: false
+recovery:
+  paid-unlock:
+    # requires Vault + an economy provider (e.g., EssentialsX Economy via Vault)
+    enabled: false
+    # locksmith service fee to recover a lock when the owner is also the last player who opened it
+    cost: 5000.0
 lockpicks:
   # true = allow lock pick crafting and usage
   enabled: true
