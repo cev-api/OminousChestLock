@@ -6,7 +6,7 @@ softdepend: [Vault, Essentials]
 commands:
   chestlock:
     description: Admin commands for ChestLock
-    usage: "/chestlock <info|unlock|reload|keyinfo|loglevel|normalkeys|lockpicks|minigame|lockoutscope|give|help>"
+    usage: "/chestlock <info|unlock|reload|keyinfo|loglevel|normalkeys|lockpicks|minigame|lockoutscope|give|migrate|help>"
     permission: chestlock.admin
   chestlockrecover:
     description: Confirm paid recovery unlock after prompt
@@ -15,5 +15,4 @@ permissions:
   chestlock.admin:
     description: Allows use of ChestLock admin commands
     default: op
-
 
