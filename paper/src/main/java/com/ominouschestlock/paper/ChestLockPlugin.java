@@ -1,5 +1,16 @@
 package com.ominouschestlock.paper;
 
+import com.ominouschestlock.paper.api.LockSnapshot;
+import com.ominouschestlock.paper.api.OminousChestLockApi;
+import com.ominouschestlock.paper.api.event.LockActionCause;
+import com.ominouschestlock.paper.api.event.LockCreateEvent;
+import com.ominouschestlock.paper.api.event.LockoutAppliedEvent;
+import com.ominouschestlock.paper.api.event.LockPickAttemptEvent;
+import com.ominouschestlock.paper.api.event.LockPickFailEvent;
+import com.ominouschestlock.paper.api.event.LockPickMode;
+import com.ominouschestlock.paper.api.event.LockPickSuccessEvent;
+import com.ominouschestlock.paper.api.event.LockRemoveEvent;
+import com.ominouschestlock.paper.api.event.LockUnlockEvent;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -25,8 +36,6 @@ import org.bukkit.block.ShulkerBox;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
-import org.bukkit.configuration.ConfigurationSection;
-import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.TNTPrimed;
 import org.bukkit.entity.EnderCrystal;
@@ -66,6 +75,7 @@ import org.bukkit.inventory.SmithingTransformRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.plugin.RegisteredServiceProvider;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.Tag;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.projectiles.ProjectileSource;
@@ -74,7 +84,6 @@ import net.milkbowl.vault.economy.Economy;
 import net.milkbowl.vault.economy.EconomyResponse;
 
 import java.io.File;
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -87,9 +96,10 @@ import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 
-public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCompleter {
+public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCompleter, OminousChestLockApi {
     private static final PlainTextComponentSerializer TEXT_SERIALIZER = PlainTextComponentSerializer.plainText();
 
     private final Map<String, LockInfo> lockedChests = new HashMap<>();
@@ -106,6 +116,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private final Map<UUID, PendingPaidUnlock> pendingPaidUnlocks = new HashMap<>();
     private int logLevel = 1;
     private boolean allowNormalKeys = false;
+    private boolean consumeNormalKeyOnUnlock = true;
     private boolean verboseMessages = false;
     private boolean allowLockpicks = true;
     private NamespacedKey pickTypeKey;
@@ -147,6 +158,10 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private boolean paidUnlockEnabled = false;
     private double paidUnlockCost = 5000.0;
     private Economy economy;
+    private LockRepository lockRepository;
+    private StorageConfig storageConfig;
+    private final Set<String> registeredLockTypes = new java.util.LinkedHashSet<>(Set.of("default"));
+    private final Set<String> registeredPickTypes = new java.util.LinkedHashSet<>(Set.of("rusty", "normal", "silence"));
 
     private static final long SILENCE_PENALTY_RESET_MS = 60L * 60L * 1000L;
     private static final int RUSTY_MODEL_DATA = 11001;
@@ -171,7 +186,12 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         pickTypeKey = new NamespacedKey(this, "lock_pick_type");
         loadConfigValues();
         setupEconomy();
+        if (!initializeStorageRepository()) {
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
         loadData();
+        getServer().getServicesManager().register(OminousChestLockApi.class, this, this, ServicePriority.Normal);
         updatePickRecipes();
         getServer().getPluginManager().registerEvents(this, this);
         if (getCommand("chestlock") != null) {
@@ -191,6 +211,8 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         }
         pendingPaidUnlocks.clear();
         saveData();
+        closeStorageRepository();
+        getServer().getServicesManager().unregister(OminousChestLockApi.class, this);
     }
 
     @Override
@@ -290,7 +312,10 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                     player.sendMessage(errorLine("That container is not locked."));
                     return true;
                 }
-                unlock(target, lockInfo.keyName());
+                if (!unlock(target, lockInfo.keyName(), player, LockActionCause.PLAYER_COMMAND, true)) {
+                    player.sendMessage(errorLine("Unlock was cancelled by another plugin."));
+                    return true;
+                }
                 player.sendMessage(successLine("Unlocked container (key name was: " + lockInfo.keyName() + ")."));
                 return true;
             }
@@ -329,10 +354,17 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 return true;
             }
             case "reload" -> {
+                saveData();
+                closeStorageRepository();
                 reloadConfig();
                 warnIfXmlConfigPresent();
                 loadConfigValues();
                 setupEconomy();
+                if (!initializeStorageRepository()) {
+                    sender.sendMessage(errorLine("Storage initialization failed. See console logs."));
+                    getServer().getPluginManager().disablePlugin(this);
+                    return true;
+                }
                 loadData();
                 updatePickRecipes();
                 sender.sendMessage(successLine("ChestLock data reloaded from config.yml."));
@@ -623,6 +655,9 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 sender.sendMessage(successLine("Minigame pin icon set to " + material.name().toLowerCase() + "."));
                 return true;
             }
+            case "migrate" -> {
+                return handleStorageMigrationCommand(sender, args);
+            }
             default -> {
                 sendHelp(sender);
                 return true;
@@ -643,7 +678,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         }
         if (args.length == 1) {
             return List.of("info", "unlock", "keyinfo", "reload", "loglevel", "normalkeys", "lockpicks", "minigame",
-                    "minigamebossbar", "minigamevisual", "pinicon", "verbosemessages", "lockoutscope", "settings", "give", "help");
+                    "minigamebossbar", "minigamevisual", "pinicon", "verbosemessages", "lockoutscope", "settings", "give", "migrate", "help");
         }
         if (args.length == 2 && args[0].equalsIgnoreCase("loglevel")) {
             return List.of("0", "1", "2", "3");
@@ -696,6 +731,12 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         if (args.length == 3 && args[0].equalsIgnoreCase("give")) {
             return List.of("rusty", "normal", "silence");
         }
+        if (args.length == 2 && args[0].equalsIgnoreCase("migrate")) {
+            return List.of("yaml");
+        }
+        if (args.length == 3 && args[0].equalsIgnoreCase("migrate")) {
+            return List.of("sqlite", "mysql");
+        }
         return List.of();
     }
 
@@ -716,6 +757,78 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         sender.sendMessage(helpLine("/chestlock lockoutscope <chest|player>", "set lockout scope"));
         sender.sendMessage(helpLine("/chestlock settings", "show current loaded settings"));
         sender.sendMessage(helpLine("/chestlock give <player> <rusty|normal|silence> [amount]", "give lock picks"));
+        sender.sendMessage(helpLine("/chestlock migrate yaml <sqlite|mysql>", "migrate YAML lock data into configured SQL backend"));
+    }
+
+    private boolean handleStorageMigrationCommand(CommandSender sender, String[] args) {
+        if (args.length != 3) {
+            sender.sendMessage(errorLine("Usage: /chestlock migrate yaml <sqlite|mysql>"));
+            return true;
+        }
+        if (!minigameSessionsByPlayer.isEmpty()) {
+            sender.sendMessage(errorLine("Cannot migrate while lockpick sessions are active."));
+            return true;
+        }
+        String from = args[1].toLowerCase(Locale.ROOT);
+        String to = args[2].toLowerCase(Locale.ROOT);
+        if (!"yaml".equals(from)) {
+            sender.sendMessage(errorLine("Only YAML source migration is currently supported."));
+            return true;
+        }
+        if (!"sqlite".equals(to) && !"mysql".equals(to)) {
+            sender.sendMessage(errorLine("Target must be sqlite or mysql."));
+            return true;
+        }
+        if (lockRepository == null) {
+            sender.sendMessage(errorLine("Storage backend is not initialized."));
+            return true;
+        }
+        if (!lockRepository.backendName().equals(to)) {
+            sender.sendMessage(errorLine("Configured storage is " + lockRepository.backendName() + ". Set storage.type to " + to
+                    + " and run /chestlock reload before migrating."));
+            return true;
+        }
+
+        YamlLockRepository yamlRepository = new YamlLockRepository(getDataFolder(), dataFile, GRID_MAX_COLUMNS, GRID_MAX_ROWS, getLogger(), this::parseLocationKey);
+        try {
+            yamlRepository.initialize();
+            Map<String, LockInfo> source = yamlRepository.loadAll();
+            if (source.isEmpty()) {
+                sender.sendMessage(successLine("No YAML locks found to migrate."));
+                return true;
+            }
+
+            lockRepository.upsertAll(source);
+            Map<String, LockInfo> target = lockRepository.loadAll();
+            int verified = 0;
+            for (Map.Entry<String, LockInfo> entry : source.entrySet()) {
+                LockInfo migrated = target.get(entry.getKey());
+                if (migrated != null && entry.getValue() != null && entry.getValue().keyName().equals(migrated.keyName())) {
+                    verified++;
+                }
+            }
+            // Keep runtime state aligned with migrated backend data so later saves do not overwrite migrated rows.
+            lockedChests.clear();
+            keyToChest.clear();
+            for (Map.Entry<String, LockInfo> entry : target.entrySet()) {
+                String locationKey = entry.getKey();
+                LockInfo info = entry.getValue();
+                if (locationKey == null || info == null) {
+                    continue;
+                }
+                lockedChests.put(locationKey, info);
+                keyToChest.putIfAbsent(info.keyName(), locationKey);
+            }
+            sender.sendMessage(successLine("Migration complete: " + source.size() + " YAML lock records processed into "
+                    + lockRepository.backendName() + " (" + verified + " verified by key/location)."));
+            sender.sendMessage(detailLine("Source kept", dataFile.getAbsolutePath(), NamedTextColor.YELLOW));
+            getLogger().info("Storage migration summary: source=yaml target=" + lockRepository.backendName()
+                    + " processed=" + source.size() + " verified=" + verified);
+        } catch (LockRepositoryException exception) {
+            sender.sendMessage(errorLine("Migration failed: " + exception.getMessage()));
+            getLogger().severe("Storage migration failed: " + exception.getMessage());
+        }
+        return true;
     }
 
     private String formatPercent(double value) {
@@ -747,6 +860,40 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
                 .append(Component.text(command, NamedTextColor.AQUA))
                 .append(Component.text(" - ", NamedTextColor.DARK_GRAY))
                 .append(Component.text(description, NamedTextColor.GREEN));
+    }
+
+    private LockSnapshot toSnapshot(List<Location> locations, LockInfo info) {
+        if (info == null) {
+            return null;
+        }
+        LockMinigameData mg = info.minigameData();
+        return new LockSnapshot(
+                info.keyName(),
+                info.creatorName(),
+                info.creatorUuid(),
+                info.lastUserName(),
+                info.lastUserUuid(),
+                info.normalKey(),
+                info.normalArmed(),
+                info.lastPickUserName(),
+                info.lastPickUserUuid(),
+                info.lastPickType(),
+                info.lastPickTimestamp(),
+                info.rustyLimit(),
+                info.rustyAttempts(),
+                info.normalLimit(),
+                info.normalAttempts(),
+                info.silenceLimit(),
+                info.silenceAttempts(),
+                info.silenceOverLimitAttempts(),
+                info.silencePenaltyTimestamp(),
+                mg == null ? null : mg.type(),
+                mg == null ? 0 : mg.pins(),
+                mg == null ? 0 : mg.depths(),
+                mg == null ? 0L : mg.createdTimestamp(),
+                mg == null ? 0 : mg.saltVersion(),
+                locations == null ? List.of() : new ArrayList<>(locations)
+        );
     }
 
     private PickType parsePickType(String value) {
@@ -1042,6 +1189,17 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             endMinigameSession(session, true, errorLine("Lock no longer exists."));
             return;
         }
+        LockPickAttemptEvent attemptEvent = new LockPickAttemptEvent(
+                player,
+                session.locations.getFirst(),
+                session.pickType.id,
+                LockPickMode.MINIGAME,
+                toSnapshot(session.locations, lockInfo)
+        );
+        Bukkit.getPluginManager().callEvent(attemptEvent);
+        if (attemptEvent.isCancelled()) {
+            return;
+        }
         if (minigameRequireHoldingPick) {
             PickMatch heldPick = findHeldPick(player, session.pickType);
             if (heldPick == null) {
@@ -1069,7 +1227,16 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         boolean noSameTypeInHand = !hasHeldPickType(player, session.pickType);
 
         animateTurnBossbar(player, session, shownProgress, result, pickBroken, () -> {
-            unlock(session.locations.getFirst().getBlock(), lockInfo.keyName());
+            Bukkit.getPluginManager().callEvent(new LockPickSuccessEvent(
+                    player,
+                    session.locations.getFirst(),
+                    session.pickType.id,
+                    LockPickMode.MINIGAME,
+                    toSnapshot(session.locations, lockInfo)));
+            if (!unlock(session.locations.getFirst().getBlock(), lockInfo.keyName(), player, LockActionCause.PICK_SUCCESS, true)) {
+                endMinigameSession(session, true, errorLine("Unlock was cancelled by another plugin."));
+                return;
+            }
             playSuccess(player, session.locations.getFirst());
             if (verboseMessages) {
                 player.sendMessage(successLine("Chest lock successfully picked."));
@@ -1100,6 +1267,22 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             playPickFeedbackSound(session.locations.getFirst().getBlock(), player, session.pickType, Sound.BLOCK_VAULT_HIT);
         } else {
             playPickFeedbackSound(session.locations.getFirst().getBlock(), player, session.pickType, Sound.BLOCK_CHEST_LOCKED);
+        }
+        Bukkit.getPluginManager().callEvent(new LockPickFailEvent(
+                player,
+                session.locations.getFirst(),
+                session.pickType.id,
+                LockPickMode.MINIGAME,
+                result.overLimit,
+                toSnapshot(session.locations, lockInfo)));
+        if (result.overLimit || result.lockoutDisplay || result.lockoutHard) {
+            Bukkit.getPluginManager().callEvent(new LockoutAppliedEvent(
+                    player,
+                    session.locations.getFirst(),
+                    session.pickType.id,
+                    LockPickMode.MINIGAME,
+                    result.lockoutEndsAtMs,
+                    toSnapshot(session.locations, lockInfo)));
         }
         logLockEvent("PICK_FAIL", player.getName(), null, session.locations.getFirst(), lockInfo,
                 attemptDetail);
@@ -1898,6 +2081,18 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
 
         Player player = event.getPlayer();
         PickType pickType = pickMatch.type();
+        LockPickAttemptEvent attemptEvent = new LockPickAttemptEvent(
+                player,
+                block.getLocation(),
+                pickType.id,
+                LockPickMode.DIRECT,
+                toSnapshot(locations, lockInfo)
+        );
+        Bukkit.getPluginManager().callEvent(attemptEvent);
+        if (attemptEvent.isCancelled()) {
+            event.setCancelled(true);
+            return;
+        }
         boolean normalKeyLock = lockInfo.normalKey();
         long now = System.currentTimeMillis();
         boolean success;
@@ -2038,7 +2233,12 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         }
 
         if (success) {
-            unlock(block, lockInfo.keyName());
+            Bukkit.getPluginManager().callEvent(new LockPickSuccessEvent(
+                    player, block.getLocation(), pickType.id, LockPickMode.DIRECT, toSnapshot(locations, lockInfo)));
+            if (!unlock(block, lockInfo.keyName(), player, LockActionCause.PICK_SUCCESS, true)) {
+                event.setCancelled(true);
+                return;
+            }
             if (verboseMessages) {
                 player.sendMessage(successLine("Chest lock successfully picked."));
             }
@@ -2054,6 +2254,12 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             }
         } else {
             event.setCancelled(true);
+            Bukkit.getPluginManager().callEvent(new LockPickFailEvent(
+                    player, block.getLocation(), pickType.id, LockPickMode.DIRECT, overLimit, toSnapshot(locations, lockInfo)));
+            if (overLimit || lockoutNow) {
+                Bukkit.getPluginManager().callEvent(new LockoutAppliedEvent(
+                        player, block.getLocation(), pickType.id, LockPickMode.DIRECT, 0L, toSnapshot(locations, lockInfo)));
+            }
             logLockEvent("PICK_FAIL", player.getName(), null, block.getLocation(), lockInfo,
                     "pick=" + pickType.id + (overLimit ? " overLimit=true" : ""));
         }
@@ -2263,7 +2469,14 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         logLockEvent("OPEN_ALLOWED", player.getName(), heldKeyName, locations.getFirst(), lockInfo, null);
         if (keyMatch != null && keyMatch.normal() && lockInfo.normalKey()) {
             if (lockInfo.normalArmed()) {
-                unlock(locations.getFirst().getBlock(), lockInfo.keyName());
+                if (!consumeNormalKeyOnUnlock) {
+                    // Configured behavior: keep normal-key locks persistent (ominous-style).
+                    return;
+                }
+                if (!unlock(locations.getFirst().getBlock(), lockInfo.keyName(), player, LockActionCause.NORMAL_KEY_CONSUMED, true)) {
+                    event.setCancelled(true);
+                    return;
+                }
                 consumeOneKey(player, keyMatch);
                 if (verboseMessages) {
                     player.sendMessage(successLine("Chest unlocked with key: " + heldKeyName));
@@ -2482,7 +2695,10 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             return;
         }
 
-        unlock(block, lockInfo.keyName());
+        if (!unlock(block, lockInfo.keyName(), event.getPlayer(), LockActionCause.PLAYER_KEY_USE, true)) {
+            event.setCancelled(true);
+            return;
+        }
         if (verboseMessages && shouldSendPlayerMessage(event.getPlayer().getUniqueId(), "break-ok:" + locationKey(block.getLocation()), 1250L)) {
             event.getPlayer().sendMessage(successLine("Chest unlocked with key: " + heldKeyName));
         }
@@ -2554,6 +2770,11 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         if (locations.isEmpty()) {
             return false;
         }
+        LockCreateEvent createEvent = new LockCreateEvent(creator, keyName, normalKey, locations, toSnapshot(locations, getLockInfo(locations)));
+        Bukkit.getPluginManager().callEvent(createEvent);
+        if (createEvent.isCancelled()) {
+            return false;
+        }
         Set<String> currentLocationKeys = new java.util.HashSet<>();
         for (Location location : locations) {
             currentLocationKeys.add(locationKey(location));
@@ -2588,8 +2809,27 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         return true;
     }
 
-    private void unlock(Block block, String keyName) {
+    private boolean unlock(Block block, String keyName) {
+        return unlock(block, keyName, null, LockActionCause.UNKNOWN, true);
+    }
+
+    private boolean unlock(Block block, String keyName, Player actor, LockActionCause cause, boolean allowCancel) {
         List<Location> locations = resolveLockLocations(block);
+        LockInfo existing = getLockInfo(locations);
+        if (existing == null) {
+            return false;
+        }
+        LockSnapshot snapshot = toSnapshot(locations, existing);
+        LockUnlockEvent unlockEvent = new LockUnlockEvent(actor, keyName, locations, snapshot, cause);
+        Bukkit.getPluginManager().callEvent(unlockEvent);
+        if (allowCancel && unlockEvent.isCancelled()) {
+            return false;
+        }
+        LockRemoveEvent removeEvent = new LockRemoveEvent(actor, keyName, locations, snapshot, cause);
+        Bukkit.getPluginManager().callEvent(removeEvent);
+        if (allowCancel && removeEvent.isCancelled()) {
+            return false;
+        }
         String containerId = containerSessionKey(locations);
         if (containerId != null) {
             MinigameSession session = minigameSessionsByContainer.get(containerId);
@@ -2602,6 +2842,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         }
         refreshKeyMapping(keyName);
         saveData();
+        return true;
     }
 
     private void refreshKeyMapping(String keyName) {
@@ -2889,6 +3130,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     private void loadConfigValues() {
         logLevel = getConfig().getInt("logging.level", 1);
         allowNormalKeys = getConfig().getBoolean("keys.allow-normal", false);
+        consumeNormalKeyOnUnlock = getConfig().getBoolean("keys.normal.consume-on-unlock", true);
         verboseMessages = getConfig().getBoolean("messages.verbose-lock-actions", false);
         allowLockpicks = getConfig().getBoolean("lockpicks.enabled", true);
         pickLimitMin = Math.max(1, getConfig().getInt("lockpicks.limit.min", 1));
@@ -2932,6 +3174,53 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         ominousRegenerateOnAttempt = getConfig().getBoolean("lockpicks.minigame.ominous.regenerate-on-attempt", true);
         paidUnlockEnabled = getConfig().getBoolean("recovery.paid-unlock.enabled", false);
         paidUnlockCost = Math.max(0.0, getConfig().getDouble("recovery.paid-unlock.cost", 5000.0));
+    }
+
+    private boolean initializeStorageRepository() {
+        try {
+            storageConfig = StorageConfig.from(getConfig(), getDataFolder());
+            lockRepository = switch (storageConfig.type()) {
+                case "yaml" -> new YamlLockRepository(getDataFolder(), dataFile, GRID_MAX_COLUMNS, GRID_MAX_ROWS, getLogger(), this::parseLocationKey);
+                case "sqlite" -> new SqliteLockRepository(storageConfig.sqliteFile());
+                case "mysql" -> {
+                    if (!storageConfig.mysql().isConfigured()) {
+                        throw new LockRepositoryException("MySQL storage selected but host/database/username is missing in config.");
+                    }
+                    yield new MysqlLockRepository(storageConfig.mysql());
+                }
+                default -> throw new LockRepositoryException("Unsupported storage backend: " + storageConfig.type());
+            };
+            lockRepository.initialize();
+            getLogger().info("Storage backend: " + lockRepository.backendName());
+            if ("sqlite".equals(storageConfig.type())) {
+                getLogger().info("SQLite file: " + storageConfig.sqliteFile().getAbsolutePath());
+            }
+            if ("mysql".equals(storageConfig.type())) {
+                getLogger().info("MySQL: " + storageConfig.mysql().host() + ":" + storageConfig.mysql().port()
+                        + "/" + storageConfig.mysql().database());
+            }
+            return true;
+        } catch (LockRepositoryException exception) {
+            getLogger().severe("Storage initialization failed: " + exception.getMessage());
+            if (exception.getCause() != null) {
+                getLogger().severe("Storage error cause: " + exception.getCause().getMessage());
+            }
+            lockRepository = null;
+            return false;
+        }
+    }
+
+    private void closeStorageRepository() {
+        if (lockRepository == null) {
+            return;
+        }
+        try {
+            lockRepository.close();
+        } catch (LockRepositoryException exception) {
+            getLogger().warning("Failed to close storage backend " + lockRepository.backendName() + ": " + exception.getMessage());
+        } finally {
+            lockRepository = null;
+        }
     }
 
     private void setupEconomy() {
@@ -3031,14 +3320,7 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     }
 
     private UUID parseUuid(String value) {
-        if (value == null || value.isBlank()) {
-            return null;
-        }
-        try {
-            return UUID.fromString(value);
-        } catch (IllegalArgumentException ignored) {
-            return null;
-        }
+        return YamlStorageCodec.parseUuid(value);
     }
 
     private String getHeldKeyName(Player player) {
@@ -3232,7 +3514,10 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
             }
         }
         pendingPaidUnlocks.remove(player.getUniqueId());
-        unlock(location.getBlock(), lockInfo.keyName());
+        if (!unlock(location.getBlock(), lockInfo.keyName(), player, LockActionCause.PAID_RECOVERY, true)) {
+            player.sendMessage(errorLine("Unlock was cancelled by another plugin."));
+            return true;
+        }
         playSuccess(player, location);
         player.sendMessage(successLine("Recovered lock: locksmith service fee paid (" + formatCurrency(paidUnlockCost) + ")."));
         logLockEvent("PAID_UNLOCK", player.getName(), null, location, lockInfo, "cost=" + paidUnlockCost);
@@ -3376,241 +3661,100 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
         }
         lockedChests.clear();
         keyToChest.clear();
-        if (!getDataFolder().exists() && !getDataFolder().mkdirs()) {
-            getLogger().warning("Could not create data folder.");
-        }
-
-        if (!dataFile.exists()) {
+        if (lockRepository == null) {
             return;
         }
-
-        YamlConfiguration config = YamlConfiguration.loadConfiguration(dataFile);
-        ConfigurationSection section = config.getConfigurationSection("locked-chests");
-        if (section == null) {
-            return;
-        }
-
-        for (String locationKey : section.getKeys(false)) {
-            String keyName = null;
-            String creatorName = null;
-            UUID creatorUuid = null;
-            String lastUserName = null;
-            UUID lastUserUuid = null;
-            boolean normalKey = false;
-            boolean normalArmed = false;
-            String lastPickUserName = null;
-            UUID lastPickUserUuid = null;
-            String lastPickType = null;
-            long lastPickTimestamp = 0L;
-            Map<UUID, PickState> playerPickStates = new HashMap<>();
-            int rustyLimit = -1;
-            int rustyAttempts = 0;
-            int normalLimit = -1;
-            int normalAttempts = 0;
-            int silenceLimit = -1;
-            int silenceAttempts = 0;
-            int silenceOverLimitAttempts = 0;
-            long silencePenaltyTimestamp = 0L;
-            LockMinigameData minigameData = null;
-
-            if (section.isString(locationKey)) {
-                keyName = section.getString(locationKey);
-            } else {
-                ConfigurationSection lockSection = section.getConfigurationSection(locationKey);
-                if (lockSection != null) {
-                    keyName = lockSection.getString("key");
-                    creatorName = lockSection.getString("creator.name");
-                    String creatorId = lockSection.getString("creator.uuid");
-                    creatorUuid = parseUuid(creatorId);
-                    lastUserName = lockSection.getString("last-user.name");
-                    String lastUserId = lockSection.getString("last-user.uuid");
-                    lastUserUuid = parseUuid(lastUserId);
-                    normalKey = lockSection.getBoolean("normal.key", false);
-                    normalArmed = lockSection.getBoolean("normal.armed", false);
-                    lastPickUserName = lockSection.getString("pick.last.name");
-                    lastPickUserUuid = parseUuid(lockSection.getString("pick.last.uuid"));
-                    lastPickType = lockSection.getString("pick.last.type");
-                    lastPickTimestamp = lockSection.getLong("pick.last.timestamp", 0L);
-                    if (lastPickUserName != null && lastPickUserName.isBlank()) {
-                        lastPickUserName = null;
-                    }
-                    if (lastPickType != null && lastPickType.isBlank()) {
-                        lastPickType = null;
-                    }
-                    ConfigurationSection pickPlayers = lockSection.getConfigurationSection("pick.players");
-                    if (pickPlayers != null) {
-                        for (String playerId : pickPlayers.getKeys(false)) {
-                            UUID playerUuid = parseUuid(playerId);
-                            if (playerUuid == null) {
-                                continue;
-                            }
-                            ConfigurationSection pickStateSection = pickPlayers.getConfigurationSection(playerId);
-                            if (pickStateSection == null) {
-                                continue;
-                            }
-                            int rLimit = pickStateSection.getInt("rusty.limit", -1);
-                            int rAttempts = pickStateSection.getInt("rusty.attempts", 0);
-                            int nLimit = pickStateSection.getInt("normal.limit", -1);
-                            int nAttempts = pickStateSection.getInt("normal.attempts", 0);
-                            int sLimit = pickStateSection.getInt("silence.limit", -1);
-                            int sAttempts = pickStateSection.getInt("silence.attempts", 0);
-                            int sOver = pickStateSection.getInt("silence.over-limit-attempts", 0);
-                            long sPenalty = pickStateSection.getLong("silence.penalty-timestamp", 0L);
-                            playerPickStates.put(playerUuid, new PickState(rLimit, rAttempts, nLimit, nAttempts, sLimit, sAttempts, sOver, sPenalty));
-                        }
-                    }
-                    rustyLimit = lockSection.getInt("pick.rusty.limit", -1);
-                    rustyAttempts = lockSection.getInt("pick.rusty.attempts", 0);
-                    normalLimit = lockSection.getInt("pick.normal.limit", -1);
-                    normalAttempts = lockSection.getInt("pick.normal.attempts", 0);
-                    silenceLimit = lockSection.getInt("pick.silence.limit", -1);
-                    silenceAttempts = lockSection.getInt("pick.silence.attempts", 0);
-                    silenceOverLimitAttempts = lockSection.getInt("pick.silence.over-limit-attempts", 0);
-                    silencePenaltyTimestamp = lockSection.getLong("pick.silence.penalty-timestamp", 0L);
-                    ConfigurationSection minigameSection = lockSection.getConfigurationSection("minigame");
-                    if (minigameSection != null) {
-                        String type = minigameSection.getString("type");
-                        int pins = minigameSection.getInt("pins", 0);
-                        int depths = minigameSection.getInt("depths", 0);
-                        List<Integer> secretList = minigameSection.getIntegerList("secret");
-                        int safePins = Math.max(1, Math.min(GRID_MAX_COLUMNS, pins));
-                        int safeDepths = Math.max(1, Math.min(GRID_MAX_ROWS, depths));
-                        int[] secret = new int[Math.min(secretList.size(), safePins)];
-                        boolean oneBased = true;
-                        for (Integer value : secretList) {
-                            if (value == null || value <= 0) {
-                                oneBased = false;
-                                break;
-                            }
-                        }
-                        for (int i = 0; i < secret.length; i++) {
-                            int raw = secretList.get(i);
-                            int normalized = oneBased ? (raw - 1) : raw;
-                            secret[i] = Math.max(0, Math.min(safeDepths - 1, normalized));
-                        }
-                        long created = minigameSection.getLong("created", 0L);
-                        int saltVersion = minigameSection.getInt("salt-version", 1);
-                        if (type != null && !type.isBlank() && secret.length == safePins) {
-                            minigameData = new LockMinigameData(type, safePins, safeDepths, secret, created, saltVersion);
-                        }
-                    }
+        try {
+            Map<String, LockInfo> loaded = lockRepository.loadAll();
+            for (Map.Entry<String, LockInfo> entry : loaded.entrySet()) {
+                String locationKey = entry.getKey();
+                LockInfo info = entry.getValue();
+                if (locationKey == null || info == null) {
+                    continue;
                 }
+                lockedChests.put(locationKey, info);
+                keyToChest.putIfAbsent(info.keyName(), locationKey);
             }
-
-            if (keyName == null || keyName.isBlank()) {
-                continue;
-            }
-            LockInfo info = new LockInfo(keyName, creatorName, creatorUuid, lastUserName, lastUserUuid, normalKey, normalArmed,
-                    lastPickUserName, lastPickUserUuid, lastPickType, lastPickTimestamp,
-                    rustyLimit, rustyAttempts, normalLimit, normalAttempts, silenceLimit, silenceAttempts,
-                    silenceOverLimitAttempts, silencePenaltyTimestamp, playerPickStates, minigameData);
-            lockedChests.put(locationKey, info);
-            keyToChest.putIfAbsent(keyName, locationKey);
+            getLogger().info("Loaded " + lockedChests.size() + " locks from " + lockRepository.backendName() + " storage.");
+        } catch (LockRepositoryException exception) {
+            getLogger().severe("Failed to load lock data from " + lockRepository.backendName() + ": " + exception.getMessage());
         }
     }
 
     private void saveData() {
-        YamlConfiguration config = new YamlConfiguration();
-        ConfigurationSection section = config.createSection("locked-chests");
-        for (Map.Entry<String, LockInfo> entry : lockedChests.entrySet()) {
-            String locationKey = entry.getKey();
-            LockInfo info = entry.getValue();
-            if (info == null) {
-                continue;
-            }
-            ConfigurationSection lockSection = section.createSection(locationKey);
-            lockSection.set("key", info.keyName());
-            LocationData locationData = parseLocationKey(locationKey);
-            if (locationData != null) {
-                lockSection.set("world.name", locationData.worldName());
-                if (locationData.realm() != null) {
-                    lockSection.set("world.realm", locationData.realm());
-                }
-                if (locationData.worldUuid() != null) {
-                    lockSection.set("world.uuid", locationData.worldUuid().toString());
-                }
-            }
-            if (info.creatorName() != null) {
-                lockSection.set("creator.name", info.creatorName());
-            }
-            if (info.creatorUuid() != null) {
-                lockSection.set("creator.uuid", info.creatorUuid().toString());
-            }
-            if (info.lastUserName() != null) {
-                lockSection.set("last-user.name", info.lastUserName());
-            }
-            if (info.lastUserUuid() != null) {
-                lockSection.set("last-user.uuid", info.lastUserUuid().toString());
-            }
-            if (info.lastPickUserName() != null) {
-                lockSection.set("pick.last.name", info.lastPickUserName());
-            }
-            if (info.lastPickUserUuid() != null) {
-                lockSection.set("pick.last.uuid", info.lastPickUserUuid().toString());
-            }
-            if (info.lastPickType() != null) {
-                lockSection.set("pick.last.type", info.lastPickType());
-            }
-            if (info.lastPickTimestamp() > 0L) {
-                lockSection.set("pick.last.timestamp", info.lastPickTimestamp());
-            }
-            if (!info.playerPickStates().isEmpty()) {
-                ConfigurationSection pickPlayers = lockSection.createSection("pick.players");
-                for (Map.Entry<UUID, PickState> stateEntry : info.playerPickStates().entrySet()) {
-                    UUID playerId = stateEntry.getKey();
-                    PickState state = stateEntry.getValue();
-                    if (playerId == null || state == null) {
-                        continue;
-                    }
-                    ConfigurationSection pickStateSection = pickPlayers.createSection(playerId.toString());
-                    pickStateSection.set("rusty.limit", state.rustyLimit());
-                    pickStateSection.set("rusty.attempts", state.rustyAttempts());
-                    pickStateSection.set("normal.limit", state.normalLimit());
-                    pickStateSection.set("normal.attempts", state.normalAttempts());
-                    pickStateSection.set("silence.limit", state.silenceLimit());
-                    pickStateSection.set("silence.attempts", state.silenceAttempts());
-                    pickStateSection.set("silence.over-limit-attempts", state.silenceOverLimitAttempts());
-                    pickStateSection.set("silence.penalty-timestamp", state.silencePenaltyTimestamp());
-                }
-            }
-            if (info.normalKey()) {
-                lockSection.set("normal.key", true);
-                lockSection.set("normal.armed", info.normalArmed());
-            }
-            if (info.rustyLimit() >= 0 || info.rustyAttempts() > 0) {
-                lockSection.set("pick.rusty.limit", info.rustyLimit());
-                lockSection.set("pick.rusty.attempts", info.rustyAttempts());
-            }
-            if (info.normalLimit() >= 0 || info.normalAttempts() > 0) {
-                lockSection.set("pick.normal.limit", info.normalLimit());
-                lockSection.set("pick.normal.attempts", info.normalAttempts());
-            }
-            if (info.silenceLimit() >= 0 || info.silenceAttempts() > 0 || info.silenceOverLimitAttempts() > 0
-                    || info.silencePenaltyTimestamp() > 0L) {
-                lockSection.set("pick.silence.limit", info.silenceLimit());
-                lockSection.set("pick.silence.attempts", info.silenceAttempts());
-                lockSection.set("pick.silence.over-limit-attempts", info.silenceOverLimitAttempts());
-                lockSection.set("pick.silence.penalty-timestamp", info.silencePenaltyTimestamp());
-            }
-            if (info.minigameData() != null) {
-                LockMinigameData mg = info.minigameData();
-                lockSection.set("minigame.type", mg.type());
-                lockSection.set("minigame.pins", mg.pins());
-                lockSection.set("minigame.depths", mg.depths());
-                List<Integer> secretList = new ArrayList<>(mg.pins());
-                for (int value : mg.secret()) {
-                    secretList.add(Math.max(1, value + 1));
-                }
-                lockSection.set("minigame.secret", secretList);
-                lockSection.set("minigame.created", mg.createdTimestamp());
-                lockSection.set("minigame.salt-version", mg.saltVersion());
-            }
+        if (lockRepository == null) {
+            return;
         }
         try {
-            config.save(dataFile);
-        } catch (IOException exception) {
-            getLogger().warning("Could not save data.yml: " + exception.getMessage());
+            lockRepository.saveAll(lockedChests);
+        } catch (LockRepositoryException exception) {
+            getLogger().warning("Could not save lock data to " + lockRepository.backendName() + ": " + exception.getMessage());
         }
+    }
+
+    @Override
+    public boolean isLocked(Location location) {
+        return getLockInfo(location) != null;
+    }
+
+    @Override
+    public Optional<LockSnapshot> getLockSnapshot(Location location) {
+        if (location == null) {
+            return Optional.empty();
+        }
+        List<Location> locations = resolveLockLocations(location.getBlock());
+        return Optional.ofNullable(toSnapshot(locations, getLockInfo(locations)));
+    }
+
+    @Override
+    public boolean createLock(Location location, String keyName, Player creator, boolean normalKey) {
+        if (location == null || keyName == null || keyName.isBlank() || creator == null) {
+            return false;
+        }
+        return tryLock(location.getBlock(), keyName, creator, normalKey);
+    }
+
+    @Override
+    public boolean removeLock(Location location, Player actor) {
+        if (location == null) {
+            return false;
+        }
+        LockInfo info = getLockInfo(location);
+        if (info == null) {
+            return false;
+        }
+        return unlock(location.getBlock(), info.keyName(), actor, LockActionCause.API, true);
+    }
+
+    @Override
+    public boolean unlock(Location location, Player actor) {
+        return removeLock(location, actor);
+    }
+
+    @Override
+    public java.util.Collection<String> getRegisteredPickTypes() {
+        return List.copyOf(registeredPickTypes);
+    }
+
+    @Override
+    public java.util.Collection<String> getRegisteredLockTypes() {
+        return List.copyOf(registeredLockTypes);
+    }
+
+    @Override
+    public boolean registerLockType(String lockTypeId) {
+        if (lockTypeId == null || lockTypeId.isBlank()) {
+            return false;
+        }
+        return registeredLockTypes.add(lockTypeId.toLowerCase(Locale.ROOT));
+    }
+
+    @Override
+    public boolean registerPickType(String pickTypeId) {
+        if (pickTypeId == null || pickTypeId.isBlank()) {
+            return false;
+        }
+        return registeredPickTypes.add(pickTypeId.toLowerCase(Locale.ROOT));
     }
 
     @EventHandler
@@ -3690,4 +3834,3 @@ public final class ChestLockPlugin extends JavaPlugin implements Listener, TabCo
     }
 
 }
-
