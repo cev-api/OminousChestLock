@@ -46,7 +46,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.inventory.AbstractContainerMenu;
-import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.ContainerInput;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.level.Level;
@@ -644,29 +644,29 @@ public final class LockService {
             return false;
         }
         int slotNum = packet.slotNum();
-        ClickType clickType = packet.clickType();
+        ContainerInput clickType = packet.containerInput();
         boolean clickingTop = slotNum >= 0 && slotNum < topSize;
         boolean clickingPlayerInventory = slotNum >= topSize && slotNum < menu.slots.size();
 
-        if (clickingTop && clickType == ClickType.PICKUP && isMatchingContainerKey(menu.getCarried(), lockName)) {
+        if (clickingTop && clickType == ContainerInput.PICKUP && isMatchingContainerKey(menu.getCarried(), lockName)) {
             return true;
         }
 
-        if (clickType == ClickType.QUICK_MOVE && clickingPlayerInventory && slotNum < menu.slots.size()) {
+        if (clickType == ContainerInput.QUICK_MOVE && clickingPlayerInventory && slotNum < menu.slots.size()) {
             ItemStack clicked = menu.getSlot(slotNum).getItem();
             if (isMatchingContainerKey(clicked, lockName)) {
                 return true;
             }
         }
 
-        if (clickingTop && clickType == ClickType.SWAP) {
+        if (clickingTop && clickType == ContainerInput.SWAP) {
             ItemStack swapItem = getSwapClickItem(player, packet.buttonNum());
             if (isMatchingContainerKey(swapItem, lockName)) {
                 return true;
             }
         }
 
-        if (clickType == ClickType.QUICK_CRAFT && isMatchingContainerKey(menu.getCarried(), lockName)) {
+        if (clickType == ContainerInput.QUICK_CRAFT && isMatchingContainerKey(menu.getCarried(), lockName)) {
             for (int changedSlot : packet.changedSlots().keySet()) {
                 if (changedSlot >= 0 && changedSlot < topSize) {
                     return true;
@@ -1468,11 +1468,11 @@ public final class LockService {
         if (entity == null) {
             return "ENTITY_EXPLODE";
         }
-        if (entity.getType() == net.minecraft.world.entity.EntityType.TNT) {
+        if (entity instanceof net.minecraft.world.entity.item.PrimedTnt) {
             String mapped = tntSources.get(entity.getUUID());
             return mapped == null ? "TNT" : "TNT:" + mapped;
         }
-        if (entity.getType() == net.minecraft.world.entity.EntityType.END_CRYSTAL) {
+        if (entity instanceof net.minecraft.world.entity.boss.enderdragon.EndCrystal) {
             PendingIgnite ignite = crystalSources.get(entity.getUUID());
             if (ignite != null && System.currentTimeMillis() - ignite.timestamp() < 10000L) {
                 return "END_CRYSTAL:" + ignite.playerName();

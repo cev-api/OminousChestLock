@@ -2,7 +2,7 @@
 
 ![Screenshot](https://i.imgur.com/lheQ9q9.png)
 
-Paper plugin (1.21.0–1.21.11+) and Fabric server mod (1.21.11) that locks chests, double chests, barrels, and shulker boxes to a named Ominous or regular Trial Key, with an optional lockpicking minigame.
+Paper plugin (1.21.0 --> 26.2) and Fabric server mod (1.21.11 + 26.2) that locks chests, double chests, barrels, and shulker boxes to a named Ominous or regular Trial Key, with an optional lockpicking minigame.
 
 ## How it works
 - Rename an ominous trial key in an anvil (example: `secretkeyname`).

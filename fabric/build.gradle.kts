@@ -1,32 +1,21 @@
 plugins {
     java
-    id("fabric-loom") version "1.13.3"
+    id("net.fabricmc.fabric-loom") version "1.17.19"
     id("maven-publish")
-}
-
-loom {
-    enableModProvidedJavadoc.set(false)
-    mixin {
-        useLegacyMixinAp.set(true)
-        add(sourceSets["main"], "ominouschestlock.refmap.json")
-        defaultRefmapName.set("ominouschestlock.refmap.json")
-    }
 }
 
 java {
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of((findProperty("javaVersion") as String).toInt()))
+        languageVersion.set(JavaLanguageVersion.of((findProperty("fabricJavaVersion") as String).toInt()))
     }
 }
 
 dependencies {
     minecraft("com.mojang:minecraft:${property("minecraftVersion")}")
-    mappings(loom.officialMojangMappings())
-    modImplementation("net.fabricmc:fabric-loader:${property("fabricLoaderVersion")}")
-    modImplementation("net.fabricmc.fabric-api:fabric-api:${property("fabricApiVersion")}") {
+    implementation("net.fabricmc:fabric-loader:${property("fabricLoaderVersion")}")
+    implementation("net.fabricmc.fabric-api:fabric-api:${property("fabricApiVersion")}") {
         exclude(group = "net.fabricmc.fabric-api", module = "fabric-data-generation-api-v1")
     }
-    annotationProcessor("net.fabricmc:sponge-mixin:0.17.0+mixin.0.8.7")
     implementation(project(":common"))
     implementation("org.yaml:snakeyaml:2.2")
     include("org.yaml:snakeyaml:2.2")
@@ -52,9 +41,6 @@ tasks.processResources {
 
 tasks.jar {
     archiveBaseName.set((findProperty("pluginName") as String?) ?: "OminousChestLock")
-}
-
-tasks.remapJar {
     val baseName = (findProperty("pluginName") as String?) ?: "OminousChestLock"
     archiveFileName.set("${baseName}-${project.version}_Fabric.jar")
 }
